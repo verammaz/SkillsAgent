@@ -5,7 +5,7 @@
 #   1. Call AssetOpsBench agent tools (tools.py)
 #   2. Optionally enrich with Claude reasoning (when ANTHROPIC_API_KEY is set)
 #   3. Pull targeted domain knowledge via knowledge.get_knowledge()
-#   4. Return a structured dict: {output, confidence, should_stop}
+#   4. Return a structured dict: {output, should_stop}
 #
 # SKILL_REGISTRY (bottom of file) maps skill names to:
 #   fn          – the skill function
@@ -28,22 +28,22 @@ from knowledge import get_knowledge
 # ── LLM helper (gracefully degrades without API key) ─────────────────────────
 
 def _call_claude(system: str, user: str, max_tokens: int = 512) -> str:
-    """Call Claude for a reasoning step. Returns raw text or empty string."""
+    """Call Claude for a reasoning step; falls back to Groq if unavailable."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return ""
-    try:
-        from anthropic import Anthropic
-        client = Anthropic(api_key=api_key)
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
-        return resp.content[0].text
-    except Exception:
-        return ""
+    if api_key:
+        try:
+            from anthropic import Anthropic
+            client = Anthropic(api_key=api_key)
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=max_tokens,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+            )
+            return resp.content[0].text
+        except Exception:
+            pass
+    return ""
 
 
 def _call_groq(system: str, user: str, max_tokens: int = 512) -> str:
@@ -61,6 +61,14 @@ def _call_groq(system: str, user: str, max_tokens: int = 512) -> str:
         return resp.choices[0].message.content
     except Exception:
         return ""
+
+
+def _call_llm(system: str, user: str, max_tokens: int = 512) -> str:
+    """Call LLM for a reasoning step; tries to call Claude,falls back to Groq if unavailable."""
+    claude_resp = _call_claude(system, user, max_tokens)
+    if claude_resp:
+        return claude_resp
+    return _call_groq(system, user, max_tokens)
 
 
 def _parse_json(text: str, fallback: dict) -> dict:
@@ -84,7 +92,6 @@ def data_retrieval(asset_id: str, context: dict, task: str) -> dict:
     data      = get_sensor_data(asset_id, lookback_days=lookback)
     return {
         "output":      {"sensor_data": data},
-        "confidence":  0.5,   # low: retrieval alone doesn't complete the task
         "should_stop": False,
     }
 
@@ -99,8 +106,8 @@ def metadata_retrieval(asset_id: str, context: dict, task: str) -> dict:
     """IoT agent — fetch sensor catalog and unit descriptions."""
     raw = get_asset_metadata(asset_id)
 
-    # Optionally let Claude summarize for readability
-    llm_summary = _call_claude(
+    # Optionally let LLM summarize for readability
+    llm_summary = _call_llm(
         system="Summarize the following sensor catalog in plain language.",
         user=json.dumps(raw),
         max_tokens=256,
@@ -110,7 +117,6 @@ def metadata_retrieval(asset_id: str, context: dict, task: str) -> dict:
             "metadata": raw,
             "summary":  llm_summary or f"{len(raw.get('sensors', []))} sensors found for {asset_id}.",
         },
-        "confidence":  0.95,
         "should_stop": True,   # metadata queries are self-contained
     }
 
@@ -124,7 +130,7 @@ def _metadata_skip(context: dict) -> bool:
 def anomaly_detection(asset_id: str, context: dict, task: str) -> dict:
     """TSFM agent — detect anomalies in sensor readings."""
     if "sensor_data" not in context:
-        return {"output": {}, "confidence": 0.0, "should_stop": False}
+        return {"output": {},  "should_stop": False}
 
     knowledge  = get_knowledge("anomaly_detection", task, context)
     thresholds = knowledge.get("sensor_thresholds")
@@ -132,8 +138,8 @@ def anomaly_detection(asset_id: str, context: dict, task: str) -> dict:
 
     severity = result.get("severity", "none")
 
-    # Optionally enrich with Claude reasoning
-    llm_out = _call_claude(
+    # Optionally enrich with LLM reasoning
+    llm_out = _call_llm(
         system=(
             "You are an anomaly analysis agent. Given sensor anomalies, "
             "assess their significance. Return JSON with keys: "
@@ -149,7 +155,6 @@ def anomaly_detection(asset_id: str, context: dict, task: str) -> dict:
 
     # No anomalies → task complete (early stop); anomalies → need more skills
     should_stop = severity == "none"
-    confidence  = 0.85 if should_stop else 0.6   # 0.6: anomalies found, task not done yet
 
     return {
         "output": {
@@ -157,7 +162,6 @@ def anomaly_detection(asset_id: str, context: dict, task: str) -> dict:
             "anomalies_detected": result["anomalies_detected"],
             "severity":           severity,
         },
-        "confidence":  confidence,
         "should_stop": should_stop,
     }
 
@@ -201,7 +205,7 @@ def root_cause_analysis(asset_id: str, context: dict, task: str) -> dict:
             "You are a root cause analysis agent for industrial chillers. "
             "Given anomaly data and a diagnosed failure, explain the root cause "
             "and recommend an action. Return JSON with keys: "
-            "explanation (string), recommended_action (string), confidence (0.0-1.0)."
+            "explanation (string), recommended_action (string)."
         ),
         user=(
             f"Asset: {asset_id}\n"
@@ -210,8 +214,7 @@ def root_cause_analysis(asset_id: str, context: dict, task: str) -> dict:
             f"Failure library: {failure_modes}"
         ),
     )
-    enrichment = _parse_json(llm_out, {"explanation": "", "recommended_action": "", "confidence": 0.7})
-    confidence = float(enrichment.get("confidence", 0.75))
+    enrichment = _parse_json(llm_out, {"explanation": "", "recommended_action": ""})
 
     return {
         "output": {
@@ -221,7 +224,6 @@ def root_cause_analysis(asset_id: str, context: dict, task: str) -> dict:
             "sensor_data":    sensor_data,
             "rca_detail":     enrichment,
         },
-        "confidence":  confidence,
         "should_stop": False,
     }
 
@@ -255,7 +257,6 @@ def validate_failure(asset_id: str, context: dict, task: str) -> dict:
             "work_order_needed": work_order_needed,
             "response_time":     response_time,
         },
-        "confidence":  0.88,
         "should_stop": not work_order_needed,   # stop if no WO needed
     }
 
@@ -292,8 +293,8 @@ def forecasting(asset_id: str, context: dict, task: str) -> dict:
 
     maintenance_needed = bool(breaches)
 
-    # Claude enrichment
-    llm_out = _call_claude(
+    # LLM enrichment
+    llm_out = _call_llm(
         system=(
             "You are a predictive maintenance agent. "
             "Given a sensor forecast and operating limits, explain whether "
@@ -318,7 +319,6 @@ def forecasting(asset_id: str, context: dict, task: str) -> dict:
             "maintenance_needed": maintenance_needed,
             "forecast_detail":    enrichment,
         },
-        "confidence":  0.85,
         "should_stop": should_stop,
     }
 
@@ -344,7 +344,6 @@ def work_order_generation(asset_id: str, context: dict, task: str) -> dict:
         "output": {
             "work_order": wo,
         },
-        "confidence":  0.95,
         "should_stop": True,   # always terminal
     }
 
