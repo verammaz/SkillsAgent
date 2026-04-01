@@ -5,7 +5,7 @@
 #   TSFM agent  → detect_anomaly, forecast_sensor
 #   FMSR agent  → map_failure
 #   WO agent    → generate_work_order
-#
+#A
 # Every function currently returns mock data so the agent runs offline.
 # Replace each function body with the real AssetOpsBench agent call when ready:
 #
@@ -90,18 +90,12 @@ def detect_anomaly(data: dict, thresholds: dict = None) -> dict:
 
 def forecast_sensor(asset_id: str, sensor: str, horizon_days: int = 7) -> dict:
     """Predict future sensor values over horizon_days."""
-    # TODO: replace with real TSFM forecasting agent call
-    import random
-    base = {"flow_rate_GPM": 900, "vibration_mm_s": 2.0, "compressor_power_kW": 220}
-    base_val = base.get(sensor, 100)
-    forecasted = [round(base_val + random.uniform(-10, 20), 2) for _ in range(horizon_days)]
-    return {
-        "asset_id":        asset_id,
-        "sensor":          sensor,
-        "horizon_days":    horizon_days,
-        "forecasted":      forecasted,
-        "trend":           "increasing" if forecasted[-1] > forecasted[0] else "stable",
-    }
+    try:
+        from assetopsbench.agents import TSFMAgent
+    except ImportError as exc:
+        raise RuntimeError("assetopsbench with TSFMAgent is required for forecasting") from exc
+
+    return TSFMAgent().query(asset_id, sensor=sensor, horizon_days=horizon_days)
 
 
 # ── FMSR agent ───────────────────────────────────────────────────────────────

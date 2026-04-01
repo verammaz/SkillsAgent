@@ -5,7 +5,11 @@ Usage:
     python run.py
 """
 import json
-from agent import SkillAgent
+# Vera:
+# from agent import SkillAgent
+
+# Mana:
+from deep_agent import SkillAgent
 
 # The four scenarios from the proposal
 SCENARIOS = [
