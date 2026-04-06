@@ -6,10 +6,10 @@ Usage:
 """
 import json
 # Vera:
-# from agent import SkillAgent
+from agent import SkillAgent
 
 # Mana:
-from deep_agent import SkillAgent
+#from deep_agent import SkillAgent
 
 # The four scenarios from the proposal
 SCENARIOS = [

@@ -47,17 +47,24 @@ class SensorMetadataPlugin:
 # ── Plugin 2: Failure Mode Library ───────────────────────────────────────────
 
 class FailureModePlugin:
-    """Known failure modes with associated symptoms — used by FMSR agent."""
+    """Known failure modes with symptom keywords — fallback when FMSR is unavailable.
+
+    Names here are the short canonical forms returned by tools.map_failure() when
+    FMSR is unreachable.  When FMSR IS available, map_failure() returns FMSR names
+    (e.g. "compressor_overheating") and this list is used only as Groq enrichment
+    context.
+    """
 
     name = "failure_modes"
     relevant_skills = {"root_cause_analysis", "anomaly_detection", "validate_failure"}
 
     FAILURE_MODES = [
-        {"name": "cavitation",        "symptoms": ["vibration", "flow"],           "severity": "high"},
-        {"name": "bearing_failure",   "symptoms": ["vibration", "power", "temp"],  "severity": "high"},
-        {"name": "condenser_fouling", "symptoms": ["temp", "power", "efficiency"], "severity": "medium"},
-        {"name": "refrigerant_leak",  "symptoms": ["pressure", "temp", "COP"],     "severity": "high"},
-        {"name": "sensor_drift",      "symptoms": ["offset", "flat", "inconsistent"], "severity": "low"},
+        {"name": "cavitation",             "symptoms": ["vibration", "flow"],              "severity": "high"},
+        {"name": "bearing_failure",        "symptoms": ["vibration", "power", "temp"],     "severity": "high"},
+        {"name": "condenser_fouling",      "symptoms": ["temp", "power", "efficiency"],    "severity": "medium"},
+        {"name": "refrigerant_leak",       "symptoms": ["pressure", "temp", "COP"],        "severity": "high"},
+        {"name": "compressor_overheating", "symptoms": ["compressor", "power", "temp"],    "severity": "high"},
+        {"name": "sensor_drift",           "symptoms": ["offset", "flat", "inconsistent"], "severity": "low"},
     ]
 
     def retrieve(self, skill_name: str, task: str, context: dict) -> dict:
@@ -83,7 +90,12 @@ class MaintenancePolicyPlugin:
             "medium":   "72 hours",
             "low":      "next scheduled maintenance",
         },
-        "auto_escalate": ["cavitation", "bearing_failure", "refrigerant_leak"],
+        # includes both fallback names and FMSR short names from tools.map_failure()
+        "auto_escalate": [
+            "cavitation", "bearing_failure", "refrigerant_leak",
+            "compressor_overheating", "heat_exchangers",
+            "refrigerant_operated_control_valve_failed_spring",
+        ],
     }
 
     def retrieve(self, skill_name: str, task: str, context: dict) -> dict:

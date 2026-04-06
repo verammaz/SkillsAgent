@@ -196,7 +196,7 @@ def root_cause_analysis(asset_id: str, context: dict, task: str) -> dict:
         anomaly = context["anomaly_analysis"]
 
     failure_modes = knowledge.get("failure_modes", [])
-    failure       = map_failure(anomaly, failure_modes)
+    failure       = map_failure(anomaly, failure_modes, asset_id=asset_id)
     severity      = anomaly.get("severity", "unknown")
 
     # llm enrichment: explain the root cause -- use groq (free) for now
@@ -218,11 +218,9 @@ def root_cause_analysis(asset_id: str, context: dict, task: str) -> dict:
 
     return {
         "output": {
-            "failure":        failure,
-            "severity":       severity,
-            "anomaly":        anomaly,
-            "sensor_data":    sensor_data,
-            "rca_detail":     enrichment,
+            "failure":    failure,
+            "severity":   severity,
+            "rca_detail": enrichment,
         },
         "should_stop": False,
     }
