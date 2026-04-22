@@ -9,7 +9,15 @@
 #   .retrieve(skill_name, task, context) -> dict
 #
 # Add new plugins to ALL_PLUGINS — the executor picks them up automatically.
+#
+# Ablations (eval_runner): set KNOWLEDGE_INJECTION=0 to match proposal
+# Table~5 condition C (planning only, no knowledge injection).
+#
+# Phase F: set ``COUCHDB_EXPORT_PATH`` to a CouchDB ``main.json``-style export
+# (millions of IoT docs).  We only stream a few docs to merge *sensor column names*
+# into metadata — never load the full file into the LLM.
 
+import os
 import re
 
 
@@ -38,9 +46,25 @@ class SensorMetadataPlugin:
         if not _relevant(skill_name, self.relevant_skills):
             return {}
         asset = _extract_asset(task)
+        base = dict(self.CATALOG.get(asset, {}))
+        export_path = os.getenv("COUCHDB_EXPORT_PATH")
+        if export_path:
+            try:
+                from couch_export_catalog import build_sensor_catalog_from_export
+
+                live = build_sensor_catalog_from_export(export_path)
+                merged = live.get(asset)
+                if merged and merged.get("sensors"):
+                    static = list(base.get("sensors") or [])
+                    live_cols = merged["sensors"]
+                    seen = set(static)
+                    base["sensors"] = static + [c for c in live_cols if c not in seen]
+                    base["couch_export_source"] = export_path
+            except Exception:
+                pass
         return {
-            "asset_id":       asset,
-            "sensor_metadata": self.CATALOG.get(asset, {}),
+            "asset_id": asset,
+            "sensor_metadata": base,
         }
 
 
@@ -138,7 +162,33 @@ class OperatingRangesPlugin:
         }
 
 
-# ── Plugin 5: Time-Series Metadata ───────────────────────────────────────────
+# ── Plugin 5: Anomaly Definition (Deep TSFM path) ────────────────────────────
+
+class AnomalyDefinitionPlugin:
+    """Parameters and semantics for full statistical TSAD / deep TSFM validation.
+
+    Proposal Sec.~4: Conditional Deep TSFM uses this plugin; Operating Ranges
+    covers the lightweight path only.
+    """
+
+    name = "anomaly_definition"
+    relevant_skills = {"root_cause_analysis"}
+
+    DEFINITION = {
+        "min_context_rows": 96,
+        "description": (
+            "Integrated conformal TSAD on primary series; merged with tight "
+            "profile/IQR check vs. lightweight thresholds."
+        ),
+    }
+
+    def retrieve(self, skill_name: str, task: str, context: dict) -> dict:
+        if not _relevant(skill_name, self.relevant_skills):
+            return {}
+        return {"anomaly_definition": dict(self.DEFINITION)}
+
+
+# ── Plugin 6: Time-Series Metadata ───────────────────────────────────────────
 
 class TimeSeriesMetadataPlugin:
     """Seasonality, resolution, and feature config for the TSFM agent."""
@@ -167,12 +217,15 @@ ALL_PLUGINS = [
     FailureModePlugin(),
     MaintenancePolicyPlugin(),
     OperatingRangesPlugin(),
+    AnomalyDefinitionPlugin(),
     TimeSeriesMetadataPlugin(),
 ]
 
 
 def get_knowledge(skill_name: str, task: str, context: dict) -> dict:
     """Merge knowledge from every plugin that serves `skill_name`."""
+    if os.getenv("KNOWLEDGE_INJECTION", "1").lower() not in ("1", "true", "yes"):
+        return {}
     merged = {}
     for plugin in ALL_PLUGINS:
         if _relevant(skill_name, plugin.relevant_skills):

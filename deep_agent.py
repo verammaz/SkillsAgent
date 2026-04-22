@@ -47,7 +47,10 @@ def tool_map_failure_for_asset(asset_id: str, lookback_days: int = 7) -> dict:
 
 def tool_forecast_sensor(asset_id: str, sensor: str, horizon_days: int = 7) -> dict:
     """Forecast future sensor values for an asset."""
-    return forecast_sensor(asset_id, sensor, horizon_days=horizon_days)
+    data = get_sensor_data(asset_id, lookback_days=horizon_days)
+    return forecast_sensor(
+        asset_id, sensor, horizon_days=horizon_days, sensor_data=data
+    )
 
 
 def tool_generate_work_order(asset_id: str, failure: str, priority: str = "high") -> dict:

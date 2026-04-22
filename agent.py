@@ -1,21 +1,17 @@
-"""agent.py
+"""SkillAgent: LLM planner + knowledge-aware executor for AssetOpsBench tasks.
 
-SkillAgent: the unified entry point for AssetOpsBench skill-augmented reasoning.
-
-Architecture:
-    1. Planner   — LLM generates an ordered skill plan; heuristic fallback if unavailable.
-    2. Executor  — runs each skill with four efficiency optimizations:
-                     (a) conditional execution  via skill.should_skip(context)
-                     (b) early stopping         via should_stop flag or confidence threshold
-                     (c) cost-aware skipping    if a cost budget is set
-                     (d) knowledge injection    via get_knowledge() per skill
-    3. Skills    — atomic, reusable workflows in skills.py
-    4. Knowledge — targeted domain knowledge injected per skill in knowledge.py
-    5. Tools     — AssetOpsBench agent wrappers in tools.py
+Layers:
+    1. Planner — LLM produces an ordered skill list; heuristic fallback on failure.
+    2. Confidence Evaluator (`confidence_evaluator.should_invoke_deep_tsfm`) —
+       gates `deep_tsfm_refine_anomalies` inside `root_cause_analysis` when the
+       FMSR-proxy confidence is below `RCA_CONFIDENCE_THETA` (proposal cond. E).
+    3. Executor — runs each skill with (a) `should_skip(context)`,
+       (b) `should_stop` early termination, (c) `cost_budget` skipping,
+       (d) `get_knowledge()` injection.
 """
 
 import dotenv
-dotenv.load_dotenv()  # load .env file if present
+dotenv.load_dotenv()
 
 import os
 import re
@@ -24,12 +20,20 @@ import logging
 import time
 from typing import Optional
 
-from skills import SKILL_REGISTRY
+from skills import CALIBRATED_COSTS, SKILL_REGISTRY
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-7s  %(message)s")
 logger = logging.getLogger(__name__)
 
-CONFIDENCE_THRESHOLD = 0.90   # early stop when confidence exceeds this
+# Cost charged on top of RCA when the Confidence Evaluator invokes deep TSFM.
+# Order: DEEP_TSFM_COST env var > calibrated `__deep_tsfm__` > 1.0.
+_env_deep = os.getenv("DEEP_TSFM_COST")
+if _env_deep is not None:
+    DEEP_TSFM_COST = float(_env_deep)
+elif isinstance(CALIBRATED_COSTS.get("__deep_tsfm__"), (int, float)):
+    DEEP_TSFM_COST = float(CALIBRATED_COSTS["__deep_tsfm__"])
+else:
+    DEEP_TSFM_COST = 1.0
 
 # ── Planner prompt ────────────────────────────────────────────────────────────
 
@@ -56,6 +60,10 @@ Ordering rules:
   - For fault + work order: add "validate_failure", "work_order_generation" after RCA.
 
 Return ONLY a valid JSON array of skill names. No explanation, no markdown.
+
+For fault-diagnosis tasks, root_cause_analysis internally runs lightweight FMSR
+mapping then may invoke deep TSFM refinement when diagnosis confidence is below
+RCA_CONFIDENCE_THETA (env, default 0.8); do not add a separate skill for that.
 """
 
 
@@ -70,39 +78,22 @@ class SkillAgent:
 
     def __init__(self, cost_budget: Optional[float] = None):
         self.cost_budget = cost_budget
-        self.provider = None  # placeholder for LLM provider (e.g., Anthropic client)
-        self._client = None   # lazy-init Anthropic client
+        self.provider: Optional[str] = None
 
     # ── Planner ───────────────────────────────────────────────────────────────
 
     def plan(self, task: str) -> list:
-        """Generate an ordered skill plan. Falls back to heuristic."""
+        """Return an ordered skill plan (LLM first, heuristic fallback)."""
         try:
-            client = self._get_client()
-            raw = ""
-            if self.provider == "anthropic":
-                resp = client.messages.create(
-                    model="claude-haiku-4-5-20251001",
-                    max_tokens=256,
-                    system=PLANNER_SYSTEM,
-                    messages=[{"role": "user", "content": f"Task: {task}"}],
-                )
-                raw = resp.content[0].text.strip()
-            elif self.provider == "groq":
-                resp = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    max_tokens=256,
-                    messages=[{"role": "system", "content": PLANNER_SYSTEM},
-                        {"role": "user", "content": f"Task: {task}"}]
-                )
-                raw = resp.choices[0].message.content.strip() 
-            
+            from skills import _call_llm
+            raw = _call_llm(PLANNER_SYSTEM, f"Task: {task}", max_tokens=256).strip()
+            self.provider = (os.getenv("LLM_PROVIDER") or "watsonx").lower()
+            if not raw:
+                raise RuntimeError("empty response from all LLM providers")
             match = re.search(r"\[.*?\]", raw, re.DOTALL)
-            plan  = json.loads(match.group(0) if match else raw)
-            # TODO: add check of plan?
+            plan = json.loads(match.group(0) if match else raw)
             if not isinstance(plan, list):
                 raise ValueError(f"Non-list plan: {plan}")
-            # Validate — only keep known skills
             plan = [s for s in plan if s in SKILL_REGISTRY]
             logger.info(f"Planner (LLM) → {plan}")
             return plan
@@ -139,54 +130,58 @@ class SkillAgent:
         skipped_conditional = []   # should_skip() fired or over budget
         executed            = []   # skills that actually ran
         stopped_at          = None # skill that triggered early stop
+        skill_steps         = []   # per-skill trajectory (for JSONL logs)
         t0                  = time.time()
 
         n_skills = len(plan)
-        for (i, skill_name) in enumerate(plan):
+        for i, skill_name in enumerate(plan):
             skill = SKILL_REGISTRY.get(skill_name)
             if not skill:
                 logger.warning(f"Unknown skill '{skill_name}', skipping.")
                 skipped_conditional.append(skill_name)
                 continue
- 
-            # (c) Cost-aware: skip if over budget
+
             if self.cost_budget and (total_cost + skill["cost"]) > self.cost_budget:
                 logger.info(f"  ⊘ '{skill_name}': over budget (cost={skill['cost']}).")
                 skipped_conditional.append(skill_name)
                 continue
- 
-            # (a) Conditional execution
+
             if skill["should_skip"](context):
                 logger.info(f"  ⊘ '{skill_name}': condition not met, skipping.")
                 skipped_conditional.append(skill_name)
                 continue
- 
-            # Execute
+
             logger.info(f"  ▶ {skill_name}")
             try:
                 result = skill["fn"](asset_id, context=context, task=task)
             except Exception as e:
                 logger.error(f"  ✗ '{skill_name}' raised: {e}", exc_info=True)
                 continue
- 
-            context.update(result.get("output", {}))
+
+            out = result.get("output", {})
+            context.update(out)
             total_cost += skill["cost"]
+            # Deep TSFM fires inside root_cause_analysis. Charge it here so
+            # Condition D (deep off) and Condition E (deep gated) are
+            # cost-comparable per plan.
+            if out.get("deep_tsfm_invoked"):
+                total_cost += DEEP_TSFM_COST
             tool_calls += 1
             executed.append(skill_name)
- 
-            # confidence  = result.get("confidence", 0.5) TODO: add confidence to skill outputs?
+            skill_steps.append({
+                "skill": skill_name,
+                "output_keys": sorted(out.keys()),
+                "should_stop": bool(result.get("should_stop", False)),
+            })
+
             should_stop = result.get("should_stop", False)
-            #logger.info(f"    confidence={confidence}")
             logger.info(f"    should_stop={should_stop}")
- 
-            # (b) Early stopping
             if i != n_skills - 1 and should_stop:
                 logger.info(f"  ⏹  Early stop: '{skill_name}' signalled termination.")
                 stopped_at = skill_name
                 break
-            # TODO: add 'confidence' based stopping as well 
- 
-        # Skills that were planned but never reached due to early stop
+
+
         executed_set       = set(executed)
         conditional_set    = set(skipped_conditional)
         skipped_early_stop = [
@@ -198,39 +193,43 @@ class SkillAgent:
         if skipped_early_stop:
             logger.info(f"  ⊘ Not reached (early stop): {skipped_early_stop}")
  
-        return {
+        metrics = {
+            "plan":                  plan,
+            "tool_calls":            tool_calls,
+            "skills_executed":       executed,
+            "skills_skipped":        all_skipped,
+            "skipped_conditional":   skipped_conditional,
+            "skipped_early_stop":    skipped_early_stop,
+            "stopped_at":            stopped_at,
+            "skill_steps":           skill_steps,
+            "total_cost":            round(total_cost, 3),
+            "latency_s":             round(time.time() - t0, 3),
+            "diagnosis_confidence":          context.get("diagnosis_confidence"),
+            "diagnosis_confidence_pre_deep": context.get("diagnosis_confidence_pre_deep"),
+            "deep_tsfm_invoked":             bool(context.get("deep_tsfm_invoked", False)),
+        }
+
+        payload = {
             "task":    task,
             "asset":   asset_id,
             "result":  context,
-            "metrics": {
-                "plan":                  plan,
-                "tool_calls":            tool_calls,
-                "skills_executed":       executed,
-                "skills_skipped":        all_skipped,
-                "skipped_conditional":   skipped_conditional,
-                "skipped_early_stop":    skipped_early_stop,
-                "stopped_at":            stopped_at,
-                "total_cost":            round(total_cost, 3),
-                "latency_s":             round(time.time() - t0, 3),
-            },
+            "metrics": metrics,
         }
+        if os.getenv("TRAJECTORY_LOG_PATH"):
+            from trajectory_log import append_trajectory_line, build_agent_trajectory
+
+            append_trajectory_line(
+                build_agent_trajectory(
+                    task=task,
+                    asset_id=asset_id,
+                    plan=plan,
+                    metrics=metrics,
+                    context=context,
+                    skill_steps=skill_steps,
+                )
+            )
+        return payload
  
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
-    def _get_client(self):
-        if self._client is None:
-            if os.getenv("LLM_PROVIDER") == "anthropic":
-                from anthropic import Anthropic
-                self._client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-                self.provider = "anthropic"
-            elif os.getenv("LLM_PROVIDER") == "groq":
-                from groq import Groq
-                self._client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-                self.provider = "groq"
-        
-        return self._client
-
 
 def _extract_asset(task: str) -> str:
     m = re.search(r"chiller\s*(\d+)", task.lower())
