@@ -12,6 +12,7 @@ cost/accuracy frontier exposes both deep-off and deep-on regimes.
 
 Usage:
     python eval_runner.py [--output-dir DIR] [--hf-limit N] [--trajectory-log PATH]
+                          [--tsfm-report PATH] [--prepend-builtin]
 """
 
 from __future__ import annotations
@@ -525,12 +526,46 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Append JSONL trajectory records (one per task × condition) to this file.",
     )
+    parser.add_argument(
+        "--tsfm-report",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Load scenarios from tsfm_report.csv (id,type,label,text,tsfm_tools_called). "
+            "If omitted but TSFM_REPORT_CSV is set, that path is used."
+        ),
+    )
+    parser.add_argument(
+        "--prepend-builtin",
+        action="store_true",
+        help="Prefix BUILTIN_TASK_BANK before tsfm-report rows (dedupe by task_id).",
+    )
     args = parser.parse_args()
     task_bank = None
     if args.hf_limit is not None:
         from scenario_loader import load_hf_scenario_tasks
 
         task_bank = load_hf_scenario_tasks(limit=args.hf_limit)
+    elif args.tsfm_report or os.getenv("TSFM_REPORT_CSV"):
+        from scenario_loader import (
+            BUILTIN_TASK_BANK,
+            load_tsfm_report_tasks,
+            default_tsfm_report_path,
+        )
+
+        csv_path = args.tsfm_report or os.getenv("TSFM_REPORT_CSV") or default_tsfm_report_path()
+        if csv_path:
+            extra = load_tsfm_report_tasks(csv_path)
+            if args.prepend_builtin:
+                seen = {tid for tid, _, _ in extra}
+                prefix = [(tid, txt, cat) for tid, txt, cat in BUILTIN_TASK_BANK if tid not in seen]
+                task_bank = prefix + extra
+            else:
+                task_bank = extra or None
+        if task_bank is None:
+            logger.warning(
+                "No tsfm_report rows loaded — falling back to BUILTIN_TASK_BANK"
+            )
     evaluate_all(
         args.output_dir,
         task_bank=task_bank,

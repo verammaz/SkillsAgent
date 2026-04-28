@@ -1,6 +1,16 @@
 import pytest
 
-from scenario_loader import BUILTIN_TASK_BANK, load_hf_scenario_tasks
+from pathlib import Path
+
+from scenario_loader import (
+    BUILTIN_TASK_BANK,
+    infer_tsfm_category,
+    load_hf_scenario_tasks,
+    load_tsfm_report_tasks,
+)
+
+
+FIXTURE_CSV = Path(__file__).resolve().parent / "fixtures" / "tsfm_report_sample.csv"
 
 
 def test_builtin_task_bank_len():
@@ -39,3 +49,20 @@ def test_hf_load_falls_back_when_load_dataset_raises(monkeypatch):
     monkeypatch.setattr(datasets, "load_dataset", boom)
     rows = load_hf_scenario_tasks(limit=5)
     assert rows == list(BUILTIN_TASK_BANK)
+
+
+def test_infer_tsfm_category_tools_and_work_order_override():
+    assert infer_tsfm_category({"type": "Workorder", "text": "forecast?", "tsfm_tools_called": "run_tsfm_forecasting"}) == "fault_diagnosis"
+    assert infer_tsfm_category({"type": "FMSA", "text": "x", "tsfm_tools_called": "run_integrated_tsad"}) == "fault_diagnosis"
+    assert infer_tsfm_category({"type": "multiagent", "text": "What is the forecast?", "tsfm_tools_called": "run_tsfm_forecasting"}) == "forecasting"
+    assert infer_tsfm_category({"type": "multiagent", "text": "Any anomalies?", "tsfm_tools_called": "run_integrated_tsad"}) == "anomaly_detection"
+    assert infer_tsfm_category({"type": "multiagent", "text": "Anomalies and should I create a work order?", "tsfm_tools_called": "run_integrated_tsad"}) == "fault_diagnosis"
+
+
+def test_load_tsfm_report_fixture():
+    rows = load_tsfm_report_tasks(FIXTURE_CSV)
+    assert len(rows) == 3
+    assert rows[0][0] == "TSFM_501"
+    assert rows[0][2] == "anomaly_detection"
+    assert rows[1][2] == "forecasting"
+    assert rows[2][2] == "fault_diagnosis"

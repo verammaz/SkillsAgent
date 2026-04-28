@@ -512,6 +512,21 @@ evaluate_all(output_dir="eval_results/hf",
              task_bank=load_hf_scenario_tasks(limit=20))
 ```
 
+To run on `tsfm_report.csv` (same schema as the project root file: `id,type,label,text,tsfm_tools_called`):
+
+```bash
+python -m eval_runner --tsfm-report /path/to/tsfm_report.csv \
+    --output-dir eval_results/tsfm_slice
+
+# Optionally keep the builtin mini-bench first:
+python -m eval_runner --tsfm-report ../tsfm_report.csv --prepend-builtin \
+    --output-dir eval_results/combined
+```
+
+Alternatively set **`TSFM_REPORT_CSV`** to that path so you can omit `--tsfm-report`.
+
+Categories are inferred per row (`Workorder` → fault_diagnosis; `FMSA` → fault_diagnosis; `multiagent` uses the tools column and a work-order phrase override — see `infer_tsfm_category` in `scenario_loader.py`).
+
 The default `BUILTIN_TASK_BANK` has **12 tasks** (4 fault-diagnosis, 3
 forecasting, 3 anomaly-detection, 2 metadata) designed to vary in prompt
 specificity so the `task_specificity` signal in
@@ -644,6 +659,7 @@ non-terminal policy check without losing the deliverable.
 | `SKILL_COSTS_PATH` | Path to calibrated `skill_costs.json` (default `./skill_costs.json`) |
 | `DEEP_TSFM_COST` | Override cost charged on deep-TSFM invocation |
 | `COST_BUDGET` | Override Condition E budget (float, or `none`) |
+| `TSFM_REPORT_CSV` | Path to `tsfm_report.csv` — `eval_runner` uses it when `--tsfm-report` is omitted |
 | `TRAJECTORY_LOG_PATH` | Append per-run JSONL trajectories to this file |
 
 ---

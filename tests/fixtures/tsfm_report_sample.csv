@@ -1,0 +1,4 @@
+id,type,label,text,tsfm_tools_called
+501,multiagent,X,Is there any anomaly in Chiller 6?,run_integrated_tsad
+502,multiagent,X,What is the forecast for flow?,run_tsfm_forecasting
+503,multiagent,X,Review anomalies and whether I need a work order?,run_integrated_tsad
