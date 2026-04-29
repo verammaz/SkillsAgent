@@ -137,61 +137,26 @@ def run_condition_b(task: str) -> dict:
     }
 
 def run_condition_c(task: str) -> dict:
-    """Planner + skills; run every skill in plan (no should_skip, no knowledge).
+    """DeepAgents planner/tools with knowledge and deep TSFM disabled.
 
-    Matches proposal Table~5: condition C disables knowledge injection and deep
-    TSFM gating (E adds both).
+    Matches proposal Table~5 condition C: planning/tool use only, without
+    knowledge injection or confidence-gated deep TSFM refinement.
     """
-    from agent import SkillAgent, _extract_asset
-    from skills import SKILL_REGISTRY
-
-    # No confidence-based deep TSFM inside RCA (that is introduced in cond.~E).
     with _env_override("ENABLE_CONDITIONAL_DEEP_TSFM", "0"), _env_override(
         "KNOWLEDGE_INJECTION", "0"
     ):
-        agent = SkillAgent()
-        asset_id = _extract_asset(task)
-        plan = agent.plan(task)
-        context = {}
-        cost = 0.0
-        calls = 0
-        t0 = time.time()
+        from deep_agent import SkillAgent
 
-        for skill_name in plan:
-            skill = SKILL_REGISTRY.get(skill_name)
-            if not skill:
-                continue
-            try:
-                result = skill["fn"](asset_id, context=context, task="")
-                context.update(result.get("output", {}))
-                cost += skill["cost"]
-                calls += 1
-            except Exception:
-                pass
-
-        return {
-            "task": task,
-            "plan": plan,
-            "result": context,
-            "metrics": {
-                "plan": plan,
-                "tool_calls": calls,
-                "skills_skipped": [],
-                "skipped_conditional": [],
-                "skipped_early_stop": [],
-                "total_cost": round(cost, 3),
-                "latency_s": round(time.time() - t0, 3),
-                "diagnosis_confidence": context.get("diagnosis_confidence"),
-                "diagnosis_confidence_pre_deep": context.get("diagnosis_confidence_pre_deep"),
-                "deep_tsfm_invoked": bool(context.get("deep_tsfm_invoked", False)),
-            },
-        }
+        return SkillAgent().run(task)
 
 
 def run_condition_d(task: str) -> dict:
-    """Full SkillAgent with knowledge; disable deep TSFM gating (proposal cond.~D)."""
+    """Full SkillAgent with knowledge; disable deep TSFM gating (proposal cond.~D).
+
+    Uses deep_agent.SkillAgent (LangGraph / create_deep_agent orchestrator).
+    """
     with _env_override("ENABLE_CONDITIONAL_DEEP_TSFM", "0"):
-        from agent import SkillAgent
+        from deep_agent import SkillAgent
 
         return SkillAgent().run(task)
 
@@ -222,8 +187,12 @@ def _cost_budget_for_condition_e() -> float | None:
 
 
 def run_condition_e(task: str) -> dict:
-    """Full system including conditional deep TSFM + cost-aware skipping (cond.~E)."""
-    from agent import SkillAgent
+    """Full system including conditional deep TSFM (cond.~E).
+
+    Uses deep_agent.SkillAgent (LangGraph / create_deep_agent orchestrator).
+    The theta gate is enforced inside fmsr_root_cause_tool deterministically.
+    """
+    from deep_agent import SkillAgent
 
     budget = _cost_budget_for_condition_e()
     with _env_override("ENABLE_CONDITIONAL_DEEP_TSFM", "1"):

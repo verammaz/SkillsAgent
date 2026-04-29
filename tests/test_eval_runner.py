@@ -1,5 +1,52 @@
 """eval_runner ablation entrypoints (no full evaluate_all)."""
 
+import os
+
+
+def _patch_deep_agent(monkeypatch):
+    import deep_agent
+
+    class _FakeSkillAgent:
+        def __init__(self, cost_budget=None, theta=None):
+            self.cost_budget = cost_budget
+            self.theta = theta
+
+        def run(self, task):
+            deep_invoked = (
+                os.getenv("ENABLE_CONDITIONAL_DEEP_TSFM") == "1"
+                and float(os.getenv("RCA_CONFIDENCE_THETA", "0.8")) > 0.92
+            )
+            return {
+                "result": {
+                    "answer": "stub agent answer",
+                    "failure": "bearing_failure",
+                    "work_order": "WO-1" if deep_invoked else None,
+                },
+                "metrics": {
+                    "plan": [
+                        "data_retrieval",
+                        "anomaly_detection",
+                        "root_cause_analysis",
+                    ],
+                    "skills_executed": [
+                        "data_retrieval",
+                        "anomaly_detection",
+                        "root_cause_analysis",
+                    ],
+                    "skills_skipped": [],
+                    "skipped_conditional": [],
+                    "skipped_early_stop": [],
+                    "tool_calls": 3,
+                    "total_cost": 1.8 + (1.0 if deep_invoked else 0.0),
+                    "latency_s": 0.0,
+                    "deep_tsfm_invoked": deep_invoked,
+                    "diagnosis_confidence": 0.94 if deep_invoked else 0.92,
+                    "diagnosis_confidence_pre_deep": 0.92,
+                },
+            }
+
+    monkeypatch.setattr(deep_agent, "SkillAgent", _FakeSkillAgent)
+
 def test_condition_b_forecast_includes_sensor_data_in_result():
     from eval_runner import run_condition_b
 
@@ -11,6 +58,7 @@ def test_condition_b_forecast_includes_sensor_data_in_result():
 
 def test_condition_c_disables_knowledge(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    _patch_deep_agent(monkeypatch)
     from eval_runner import run_condition_c
 
     out = run_condition_c("Why is Chiller 6 behaving abnormally?")
@@ -20,6 +68,7 @@ def test_condition_c_disables_knowledge(monkeypatch):
 
 def test_condition_d_runs_without_error(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    _patch_deep_agent(monkeypatch)
     from eval_runner import run_condition_d
 
     out = run_condition_d("What sensors are available for Chiller 6?")
@@ -119,6 +168,7 @@ def test_condition_e_at_theta_0_95_invokes_deep_tsfm(monkeypatch):
     monkeypatch.setenv("RCA_CONFIDENCE_THETA", "0.95")
     monkeypatch.setenv("ENABLE_CONDITIONAL_DEEP_TSFM", "1")
     monkeypatch.setenv("DEEP_TSFM_COST", "1.0")
+    _patch_deep_agent(monkeypatch)
     from eval_runner import run_condition_e
 
     out = run_condition_e("Why is Chiller 6 behaving abnormally?")

@@ -40,12 +40,13 @@ task  ───►  │  1. plan(task)       (LLM: watsonx / gemini / anthropic 
 10. [Local setup](#local-setup)
 11. [Colab setup (T4 GPU)](#colab-setup)
 12. [Running the agent](#running-the-agent)
-13. [Running the ablation](#running-the-ablation)
-14. [Calibrating skill costs](#calibrating-skill-costs)
-15. [Evaluation conditions](#evaluation-conditions)
-16. [Results](#results)
-17. [Environment variables](#environment-variables)
-18. [Tests](#tests)
+13. [Using the DeepAgents agent](#using-the-deepagents-agent)
+14. [Running the ablation](#running-the-ablation)
+15. [Calibrating skill costs](#calibrating-skill-costs)
+16. [Evaluation conditions](#evaluation-conditions)
+17. [Results](#results)
+18. [Environment variables](#environment-variables)
+19. [Tests](#tests)
 
 ---
 
@@ -242,6 +243,7 @@ and IoT calls read from CSVs — no CouchDB, no subprocess.
 ```
 SkillsAgent/
 ├── agent.py                    SkillAgent: planner + executor + DEEP_TSFM_COST
+├── deep_agent.py               DeepAgents-based orchestrator (LangChain/LangGraph)
 ├── skills.py                   7 skills + SKILL_REGISTRY + _call_llm provider chain
 ├── knowledge.py                6 plugins + get_knowledge()
 ├── tools.py                    AssetOpsBench wrappers (IoT / FMSR / TSFM / WO) + mocks
@@ -256,7 +258,7 @@ SkillsAgent/
 │   ├── calibrate_costs.py      Measure wall-clock latencies → skill_costs.json
 │   ├── extract_main_json.py    main.json → data/chillers/<asset>.csv
 │   └── smoke_iot.py            IoT path live-check (subprocess or CSV)
-├── tests/                      14 test modules (see §Tests)
+├── tests/                      15 test modules (see §Tests)
 ├── eval_results/               ablation_results.csv + trajectories.jsonl per run
 ├── data/chillers/              Extracted per-asset CSVs (created by extract_main_json.py)
 ├── skill_costs.json            Calibrated per-skill median latency (optional)
@@ -337,6 +339,148 @@ Runs four benchmark scenarios:
 | What sensors does Chiller 6 have? | `metadata_retrieval` |
 
 ---
+
+## Using the DeepAgents agent
+
+`deep_agent.py` is an alternative orchestration layer for the same AssetOpsBench
+toolset, built on top of [LangChain Deep Agents](https://github.com/langchain-ai/deepagents)
+(`create_deep_agent` / LangGraph) instead of the custom planner/executor in `agent.py`.
+
+### How it differs from `agent.py` / `run.py`
+
+| | `agent.py` (skills-based) | `deep_agent.py` (DeepAgents-based) |
+|---|---|---|
+| Orchestration | Custom planner + skill executor | `create_deep_agent` (LangGraph ReAct) |
+| Tool registry | `SKILL_REGISTRY` in `skills.py` | 6 `@tool`-decorated callables |
+| Conditional deep TSFM | Inside `root_cause_analysis` skill | **Inside** `fmsr_root_cause_tool` (deterministic Python gate, not delegated to the LLM) |
+| Knowledge plugins | Called per-skill from `knowledge.py` | Called inside each tool body |
+| Cost budget | `cost_budget` arg to `SkillAgent` | Tracked in metrics; not enforced as a hard gate |
+| Tracing | `skills_executed`, `skipped_conditional`, `skipped_early_stop` | Same keys in `metrics`, inferred from tool-call trace |
+| Entry point | `SkillAgent().run(task)` | `SkillAgent().run(task)` — same interface |
+
+Both agents use the **same** real tool wrappers (`tools.py`) and the **same**
+LLM provider fallback chain (watsonx → gemini → anthropic → groq).
+
+### Additional setup
+
+Install the DeepAgents orchestration layer and its LangChain provider packages:
+
+```bash
+pip install deepagents langchain-ibm langchain-google-genai langchain-anthropic langchain-groq
+```
+
+> **LLM credentials** — `deep_agent.py` uses the same `.env` as the rest of
+> the project. At least one of the following must be set:
+>
+> | Provider | Required env vars |
+> |---|---|
+> | IBM watsonx (default) | `WATSONX_API_KEY`, `WATSONX_PROJECT_ID` |
+> | Google Gemini | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) |
+> | Anthropic Claude | `ANTHROPIC_API_KEY` |
+> | Groq | `GROQ_API_KEY` |
+>
+> Set `LLM_PROVIDER=gemini` (or `anthropic` / `groq`) to skip watsonx.
+
+### Run the smoke test (no live backend required)
+
+```bash
+python tests/test_deep_agent_smoke.py
+```
+
+Expected output (all 8 pass without AssetOpsBench or an API key — tools use
+mock fallbacks, and the agent is stubbed):
+
+```
+  PASS  test_iot_data_retrieval_tool
+  PASS  test_sensor_metadata_tool
+  PASS  test_lightweight_anomaly_tool
+  PASS  test_fmsr_root_cause_tool
+  PASS  test_forecasting_tool
+  PASS  test_work_order_tool
+  PASS  test_run_deep_agent_metadata_scenario
+  PASS  test_skill_agent_run
+```
+
+### Run a fault-diagnosis query
+
+```python
+from deep_agent import SkillAgent
+
+agent = SkillAgent()
+out = agent.run("Why is Chiller 6 behaving abnormally, and do we need a work order?")
+print(out)
+```
+
+Or with the convenience one-liner:
+
+```python
+from deep_agent import run_deep_agent
+
+out = run_deep_agent(
+    "Why is Chiller 6 behaving abnormally, and do we need a work order?",
+    threshold=0.8,   # RCA confidence threshold for deep TSFM (overrides env var)
+)
+print(out["result"]["answer"])
+```
+
+From the shell:
+
+```bash
+python - <<'PY'
+from deep_agent import SkillAgent
+agent = SkillAgent()
+out = agent.run("Why is Chiller 6 behaving abnormally, and do we need a work order?")
+import json; print(json.dumps(out, indent=2, default=str))
+PY
+```
+
+### Supported scenario types
+
+| Scenario | Example query | Key tools called |
+|---|---|---|
+| Fault diagnosis + work order | "Why is Chiller 6 behaving abnormally, and do we need a work order?" | `lightweight_anomaly_tool` → `fmsr_root_cause_tool` → `work_order_tool` |
+| Anomaly detection only | "Was there any abnormal behavior in Chiller 9 over the past week?" | `iot_data_retrieval_tool` → `lightweight_anomaly_tool` |
+| Forecasting + preventive maintenance | "Forecast next week's condenser water flow for Chiller 9." | `forecasting_tool` (→ `work_order_tool` if breach detected) |
+| Sensor metadata | "What sensors are available for Chiller 6, and what do they measure?" | `sensor_metadata_tool` |
+
+### Output format
+
+`SkillAgent.run()` returns a dict with two top-level keys:
+
+```python
+{
+  "result": {
+    "answer": "<LLM final answer text>",
+    "failure": "<diagnosed failure mode or None>",
+    "anomaly_analysis": { ... },   # from lightweight_anomaly_tool
+    "work_order": "<WO-ID or None>",
+    "forecast": { ... },           # from forecasting_tool
+    "metadata": [ ... ],           # from sensor_metadata_tool
+    "raw": { ... },                # merged payload from all tool outputs
+  },
+  "metrics": {
+    "plan": ["anomaly_detection", "root_cause_analysis", ...],  # skill names called
+    "skills_executed": [ ... ],
+    "skills_skipped": [ ... ],
+    "skipped_conditional": [],
+    "skipped_early_stop": [ ... ],
+    "stopped_at": "<last skill name>",
+    "tool_calls": 3,
+    "total_cost": 1.7,
+    "latency_s": 4.2,
+    "deep_tsfm_invoked": False,
+    "diagnosis_confidence": 0.712,
+    "diagnosis_confidence_pre_deep": 0.573,
+    "confidence": 0.712,
+    "tsfm_deep_invoked": False,
+  }
+}
+```
+
+The `metrics` dict is fully compatible with `eval_runner.py`'s `_append_row`
+and `run.py`'s `_print_metrics` — the DeepAgents agent can be dropped in
+anywhere the skills-based agent is used.
+
 
 ## Running the ablation
 
@@ -528,3 +672,4 @@ python -m pytest tests/ -v
 | `test_tools_smoke.py` | Mock-path smoke test for each `tools.py` entry point |
 | `test_trajectory_log.py` | JSONL trajectory writer |
 | `test_wo_local_csv.py` | WO real Markov predictions via local CSV (skipped if `ASSETOPS` unset) |
+| `test_deep_agent_smoke.py` | 6 tool-level + 2 agent-level tests for `deep_agent.py` (no live backend needed) |
