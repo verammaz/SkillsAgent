@@ -527,6 +527,28 @@ Alternatively set **`TSFM_REPORT_CSV`** to that path so you can omit `--tsfm-rep
 
 Categories are inferred per row (`Workorder` → fault_diagnosis; `FMSA` → fault_diagnosis; `multiagent` uses the tools column and a work-order phrase override — see `infer_tsfm_category` in `scenario_loader.py`).
 
+To score ablation conditions with the AssetOpsBench evaluator (scenario server):
+
+```bash
+# 1) Start AssetOpsBench scenario server (default: http://localhost:8099)
+# 2) Run scorer bridge from SkillsAgent
+python scripts/score_with_assetopsbench.py \
+    --scenario-set 13aab653-66fe-4fe6-84d8-89f1b18eede3 \
+    --conditions C D F E \
+    --output-dir eval_results/aob_tsfm_scored
+```
+
+Useful scenario set IDs:
+- General: `d3bec9b0-59b4-4a2f-9497-28cb1eed1c80`
+- IoT: `b3aa206a-f7dc-43c9-a1f4-dcf984417487`
+- TSFM: `13aab653-66fe-4fe6-84d8-89f1b18eede3`
+- Workorders: `4021467f-363b-41d2-8c62-f6aa738b01b7`
+
+Outputs:
+- `grading_summary.csv` (accuracy per condition)
+- `grading_details.csv` (per-scenario correctness + local run metrics)
+- `graded_<condition>.json` (raw grader response with criteria details)
+
 The default `BUILTIN_TASK_BANK` has **12 tasks** (4 fault-diagnosis, 3
 forecasting, 3 anomaly-detection, 2 metadata) designed to vary in prompt
 specificity so the `task_specificity` signal in
@@ -555,7 +577,10 @@ real costs.
 | **B** — tool baseline | — | tools only | — | — | — |
 | **C** — planning only | ✅ | ✅ | ❌ (`KNOWLEDGE_INJECTION=0`) | — | — |
 | **D** — skills + knowledge | ✅ | ✅ | ✅ | ❌ (`ENABLE_CONDITIONAL_DEEP_TSFM=0`) | — |
-| **E** — full system | ✅ | ✅ | ✅ | ✅ (θ-gated) | ✅ (80% of full-plan cost) |
+| **F** — skills + knowledge, always deep | ✅ | ✅ | ✅ | ✅ (no θ gate; `RCA_ALWAYS_DEEP_TSFM=1`) | — (no budget) |
+| **E** — full system | ✅ | ✅ | ✅ | ✅ (θ-gated; `RCA_ALWAYS_DEEP_TSFM=0` in runner) | ✅ (80% of full-plan cost) |
+
+**Comparing θ-gated vs “always run deep” in RCA:** use **E** (each θ) vs **F**. Both use the same skills, knowledge, and deep TSFM *machinery*; F bypasses `RCA_CONFIDENCE_THETA` and runs `deep_tsfm_refine_anomalies` whenever deep TSFM is enabled. Condition E also forces `RCA_ALWAYS_DEEP_TSFM=0` so a stray shell env does not break the sweep. For a **fair cost comparison** to F (no skips), run E with `COST_BUDGET=none` or override the budget env.
 
 Condition E sweeps
 `RCA_CONFIDENCE_THETA ∈ {0.5, 0.6, 0.65, 0.7, 0.8, 0.9, 0.95}` to expose
@@ -654,6 +679,7 @@ non-terminal policy check without losing the deliverable.
 | `WO_CSV_DIR` | WO sample CSVs (auto-detected from `ASSETOPS`) |
 | `COUCHDB_EXPORT_PATH` | Path to `main.json` — enables `SensorMetadataPlugin` live merge |
 | `RCA_CONFIDENCE_THETA` | Deep-TSFM gate threshold (0 ≤ θ ≤ 1; default 0.85) |
+| `RCA_ALWAYS_DEEP_TSFM` | `1` = always run deep TSFM in RCA when enabled (ablation F); θ ignored |
 | `ENABLE_CONDITIONAL_DEEP_TSFM` | `0` disables the gate (Condition D) |
 | `KNOWLEDGE_INJECTION` | `0` disables all plugins (Condition C) |
 | `SKILL_COSTS_PATH` | Path to calibrated `skill_costs.json` (default `./skill_costs.json`) |
@@ -661,6 +687,7 @@ non-terminal policy check without losing the deliverable.
 | `COST_BUDGET` | Override Condition E budget (float, or `none`) |
 | `TSFM_REPORT_CSV` | Path to `tsfm_report.csv` — `eval_runner` uses it when `--tsfm-report` is omitted |
 | `TRAJECTORY_LOG_PATH` | Append per-run JSONL trajectories to this file |
+| `TRACE_VERBOSE` | `1` adds redacted per-skill `context_before`/`context_after` snapshots to `metrics.skill_steps` |
 
 ---
 

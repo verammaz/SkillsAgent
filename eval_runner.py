@@ -1,10 +1,11 @@
-"""Five-condition ablation runner.
+"""Ablation runner (conditions A–F + E θ sweep).
 
   A. Raw LLM — no tools
   B. Tool baseline — static IoT → TSFM-lite → FMSR → WO chain (ReAct stand-in)
   C. Planning only — planner + skills, knowledge disabled, no skipping
   D. Skills + knowledge — full SkillAgent, deep TSFM disabled
-  E. Full system — D + conditional deep TSFM (θ sweep)
+  F. Skills + knowledge — always run deep TSFM in RCA (no θ gate), no cost budget
+  E. Full system — θ-gated deep TSFM + default cost budget (swept per ``THETA_VALUES``)
 
 Condition E sweeps ``RCA_CONFIDENCE_THETA`` over a range that straddles the
 observed graded-confidence knee (~0.6–0.65 on the default task bank) so the
@@ -222,13 +223,29 @@ def _cost_budget_for_condition_e() -> float | None:
     return round(full_plan_cost * 0.8, 3)
 
 
+def run_condition_f(task: str) -> dict:
+    """Skills + knowledge; deep TSFM in RCA on every fault path (no θ gate).
+
+    Compare to condition E: same planner/skills/knowledge, but ``deep_tsfm_refine_anomalies``
+    always runs when conditional deep TSFM is enabled (``RCA_ALWAYS_DEEP_TSFM=1``),
+    and no cost budget so skills are not skipped for budgeting reasons.
+    """
+    from agent import SkillAgent
+
+    with _env_override("ENABLE_CONDITIONAL_DEEP_TSFM", "1"):
+        with _env_override("RCA_ALWAYS_DEEP_TSFM", "1"):
+            with _env_override("COST_BUDGET", "none"):
+                return SkillAgent(cost_budget=None).run(task)
+
+
 def run_condition_e(task: str) -> dict:
     """Full system including conditional deep TSFM + cost-aware skipping (cond.~E)."""
     from agent import SkillAgent
 
     budget = _cost_budget_for_condition_e()
     with _env_override("ENABLE_CONDITIONAL_DEEP_TSFM", "1"):
-        return SkillAgent(cost_budget=budget).run(task)
+        with _env_override("RCA_ALWAYS_DEEP_TSFM", "0"):
+            return SkillAgent(cost_budget=budget).run(task)
 
 
 @contextmanager
@@ -267,6 +284,7 @@ def evaluate_all(
         ("B_tool_baseline", run_condition_b),
         ("C_planning_only", run_condition_c),
         ("D_skills_knowledge_no_deep_tsfm", run_condition_d),
+        ("F_skills_knowledge_always_deep", run_condition_f),
     ]
 
     for cond_name, run_fn in static_conditions:
@@ -287,7 +305,9 @@ def evaluate_all(
     for theta in THETA_VALUES:
         cond_name = f"E_full_theta_{theta.replace('.', '_')}"
         print(f"\n{'─' * 60}\nCondition: {cond_name} (RCA_CONFIDENCE_THETA={theta})\n{'─' * 60}")
-        with _env_override("RCA_CONFIDENCE_THETA", theta):
+        with _env_override("RCA_CONFIDENCE_THETA", theta), _env_override(
+            "RCA_ALWAYS_DEEP_TSFM", "0"
+        ):
             for task_id, task, category in tasks:
                 print(f"  {task_id} [{category}] {task[:55]}...")
                 _append_row(

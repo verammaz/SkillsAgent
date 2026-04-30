@@ -35,6 +35,44 @@ elif isinstance(CALIBRATED_COSTS.get("__deep_tsfm__"), (int, float)):
 else:
     DEEP_TSFM_COST = 1.0
 
+
+def _describe_value(v):
+    """Small, JSON-safe shape/value descriptor for trajectory events."""
+    if isinstance(v, dict):
+        return {"type": "dict", "keys": sorted(list(v.keys()))[:20], "len": len(v)}
+    if isinstance(v, list):
+        return {"type": "list", "len": len(v)}
+    if isinstance(v, str):
+        return {"type": "str", "len": len(v)}
+    if isinstance(v, (int, float, bool)) or v is None:
+        return {"type": type(v).__name__, "value": v}
+    return {"type": type(v).__name__}
+
+
+def _context_signature(context: dict) -> dict:
+    return {k: _describe_value(v) for k, v in context.items()}
+
+
+def _trace_verbose_enabled() -> bool:
+    return os.getenv("TRACE_VERBOSE", "0").lower() in ("1", "true", "yes")
+
+
+def _context_preview(context: dict) -> dict:
+    """Compact redacted context view for verbose traces."""
+    return {k: _describe_value(v) for k, v in context.items()}
+
+
+def _context_delta(before_sig: dict, after_sig: dict) -> dict:
+    before_keys = set(before_sig.keys())
+    after_keys = set(after_sig.keys())
+    return {
+        "added_keys": sorted(after_keys - before_keys),
+        "removed_keys": sorted(before_keys - after_keys),
+        "changed_keys": sorted(
+            k for k in (before_keys & after_keys) if before_sig.get(k) != after_sig.get(k)
+        ),
+    }
+
 # ── Planner prompt ────────────────────────────────────────────────────────────
 
 _SKILL_LIST = "\n".join(
@@ -134,45 +172,99 @@ class SkillAgent:
         t0                  = time.time()
 
         n_skills = len(plan)
+        trace_verbose = _trace_verbose_enabled()
         for i, skill_name in enumerate(plan):
+            step_event = {
+                "skill": skill_name,
+                "status": "pending",
+                "timestamp_s": round(time.time() - t0, 3),
+            }
             skill = SKILL_REGISTRY.get(skill_name)
             if not skill:
                 logger.warning(f"Unknown skill '{skill_name}', skipping.")
                 skipped_conditional.append(skill_name)
+                step_event.update({"status": "skipped_unknown_skill"})
+                skill_steps.append(step_event)
                 continue
 
             if self.cost_budget and (total_cost + skill["cost"]) > self.cost_budget:
                 logger.info(f"  ⊘ '{skill_name}': over budget (cost={skill['cost']}).")
                 skipped_conditional.append(skill_name)
+                step_event.update(
+                    {
+                        "status": "skipped_budget",
+                        "reason": f"cost_budget={self.cost_budget}",
+                        "would_add_cost": skill["cost"],
+                        "total_cost_before": round(total_cost, 3),
+                    }
+                )
+                if trace_verbose:
+                    step_event["context_before"] = _context_preview(context)
+                skill_steps.append(step_event)
                 continue
 
             if skill["should_skip"](context):
                 logger.info(f"  ⊘ '{skill_name}': condition not met, skipping.")
                 skipped_conditional.append(skill_name)
+                step_event.update({"status": "skipped_condition"})
+                if trace_verbose:
+                    step_event["context_before"] = _context_preview(context)
+                skill_steps.append(step_event)
                 continue
 
             logger.info(f"  ▶ {skill_name}")
+            before_sig = _context_signature(context)
+            skill_t0 = time.perf_counter()
             try:
                 result = skill["fn"](asset_id, context=context, task=task)
             except Exception as e:
                 logger.error(f"  ✗ '{skill_name}' raised: {e}", exc_info=True)
+                step_event.update(
+                    {
+                        "status": "error",
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                        "latency_s": round(time.perf_counter() - skill_t0, 4),
+                    }
+                )
+                if trace_verbose:
+                    step_event["context_before"] = _context_preview(context)
+                skill_steps.append(step_event)
                 continue
 
             out = result.get("output", {})
             context.update(out)
-            total_cost += skill["cost"]
+            cost_charged = float(skill["cost"])
+            total_cost += cost_charged
             # Deep TSFM fires inside root_cause_analysis. Charge it here so
             # Condition D (deep off) and Condition E (deep gated) are
             # cost-comparable per plan.
+            deep_cost_charged = 0.0
             if out.get("deep_tsfm_invoked"):
-                total_cost += DEEP_TSFM_COST
+                deep_cost_charged = float(DEEP_TSFM_COST)
+                total_cost += deep_cost_charged
             tool_calls += 1
             executed.append(skill_name)
-            skill_steps.append({
-                "skill": skill_name,
-                "output_keys": sorted(out.keys()),
-                "should_stop": bool(result.get("should_stop", False)),
-            })
+            after_sig = _context_signature(context)
+            step_event.update(
+                {
+                    "status": "executed",
+                    "latency_s": round(time.perf_counter() - skill_t0, 4),
+                    "cost_charged": round(cost_charged, 4),
+                    "deep_tsfm_cost_charged": round(deep_cost_charged, 4),
+                    "output_keys": sorted(out.keys()),
+                    "output_summary": {k: _describe_value(v) for k, v in out.items()},
+                    "context_delta": _context_delta(before_sig, after_sig),
+                    "diagnosis_confidence_pre_deep": out.get("diagnosis_confidence_pre_deep"),
+                    "diagnosis_confidence": out.get("diagnosis_confidence"),
+                    "deep_tsfm_invoked": bool(out.get("deep_tsfm_invoked", False)),
+                    "should_stop": bool(result.get("should_stop", False)),
+                }
+            )
+            if trace_verbose:
+                step_event["context_before"] = before_sig
+                step_event["context_after"] = after_sig
+            skill_steps.append(step_event)
 
             should_stop = result.get("should_stop", False)
             logger.info(f"    should_stop={should_stop}")
