@@ -25,6 +25,7 @@ import os
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)
@@ -36,6 +37,81 @@ dotenv.load_dotenv()
 from scenario_loader import BUILTIN_TASK_BANK
 
 TASK_BANK = BUILTIN_TASK_BANK
+
+
+def _normalize_category(raw: str, task: str) -> str:
+    """Map scenario metadata/query into eval categories expected by this runner."""
+    v = (raw or "").strip().lower()
+    if v in {"fault_diagnosis", "fault-diagnosis", "fault diagnosis", "workorder", "workorders", "fmsa"}:
+        return "fault_diagnosis"
+    if v in {"anomaly_detection", "anomaly-detection", "anomaly detection", "tsad", "anomaly"}:
+        return "anomaly_detection"
+    if v in {"forecasting", "forecast"}:
+        return "forecasting"
+    if v in {"metadata", "sensor_metadata", "sensor-metadata"}:
+        return "metadata"
+
+    t = task.lower()
+    if any(w in t for w in ("what sensor", "metadata", "measure", "unit", "available")):
+        return "metadata"
+    if any(w in t for w in ("forecast", "predict", "next week", "future")):
+        return "forecasting"
+    if any(w in t for w in ("anomal", "abnormal", "unusual")):
+        return "anomaly_detection"
+    return "fault_diagnosis"
+
+
+def load_scenario_file(path: str | Path) -> list[tuple[str, str, str]]:
+    """Load scenario snapshot JSON/JSONL exported from AssetOpsBench server.
+
+    Expected fields per row:
+      - ``scenario_id`` or ``id``
+      - ``query`` or ``text``
+      - optional ``category`` and/or ``metadata``
+    """
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        raise FileNotFoundError(f"scenario file not found: {p}")
+
+    def row_to_tuple(row: dict[str, Any], idx: int) -> tuple[str, str, str] | None:
+        sid = str(row.get("scenario_id") or row.get("id") or f"S_{idx}")
+        task = str(row.get("query") or row.get("text") or "").strip()
+        if not task:
+            return None
+        raw_cat = row.get("category")
+        if not raw_cat and isinstance(row.get("metadata"), dict):
+            md = row["metadata"]
+            raw_cat = md.get("category") or md.get("type") or md.get("domain")
+        cat = _normalize_category(str(raw_cat or ""), task)
+        return sid, task, cat
+
+    if p.suffix.lower() == ".jsonl":
+        rows: list[tuple[str, str, str]] = []
+        with open(p, "r", encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if isinstance(rec, dict):
+                    item = row_to_tuple(rec, i)
+                    if item:
+                        rows.append(item)
+        return rows
+
+    data = json.loads(p.read_text(encoding="utf-8"))
+    if isinstance(data, dict):
+        # exported payload shape: {"scenario_set_id": ..., "scenarios": [...]}
+        recs = data.get("scenarios", [])
+    else:
+        recs = data
+    rows = []
+    for i, rec in enumerate(recs):
+        if isinstance(rec, dict):
+            item = row_to_tuple(rec, i)
+            if item:
+                rows.append(item)
+    return rows
 
 
 def run_condition_a(task: str) -> dict:
@@ -137,6 +213,7 @@ def run_condition_b(task: str) -> dict:
             "deep_tsfm_invoked": False,
         },
     }
+
 
 def run_condition_c(task: str) -> dict:
     """Planner + skills; run every skill in plan (no should_skip, no knowledge).
@@ -269,6 +346,9 @@ def evaluate_all(
     *,
     task_bank: list[tuple[str, str, str]] | None = None,
     trajectory_log_path: str | None = None,
+    condition_codes: list[str] | None = None,
+    theta_values: list[str] | None = None,
+    scenario_set_id: str = "",
 ) -> None:
     """Run ablations. Pass ``task_bank=load_hf_scenario_tasks(limit=...)`` for HF scenarios.
 
@@ -279,13 +359,18 @@ def evaluate_all(
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
 
-    static_conditions = [
-        ("A_raw_llm", run_condition_a),
-        ("B_tool_baseline", run_condition_b),
-        ("C_planning_only", run_condition_c),
-        ("D_skills_knowledge_no_deep_tsfm", run_condition_d),
-        ("F_skills_knowledge_always_deep", run_condition_f),
-    ]
+    selected = {c.upper() for c in (condition_codes or ["A", "B", "C", "D", "F", "E"])}
+    static_conditions = []
+    if "A" in selected:
+        static_conditions.append(("A_raw_llm", run_condition_a))
+    if "B" in selected:
+        static_conditions.append(("B_tool_baseline", run_condition_b))
+    if "C" in selected:
+        static_conditions.append(("C_planning_only", run_condition_c))
+    if "D" in selected:
+        static_conditions.append(("D_skills_knowledge_no_deep_tsfm", run_condition_d))
+    if "F" in selected:
+        static_conditions.append(("F_skills_knowledge_always_deep", run_condition_f))
 
     for cond_name, run_fn in static_conditions:
         print(f"\n{'─' * 60}\nCondition: {cond_name}\n{'─' * 60}")
@@ -299,27 +384,30 @@ def evaluate_all(
                 category,
                 task,
                 run_fn,
+                scenario_set_id=scenario_set_id,
                 trajectory_log_path=trajectory_log_path,
             )
 
-    for theta in THETA_VALUES:
-        cond_name = f"E_full_theta_{theta.replace('.', '_')}"
-        print(f"\n{'─' * 60}\nCondition: {cond_name} (RCA_CONFIDENCE_THETA={theta})\n{'─' * 60}")
-        with _env_override("RCA_CONFIDENCE_THETA", theta), _env_override(
-            "RCA_ALWAYS_DEEP_TSFM", "0"
-        ):
-            for task_id, task, category in tasks:
-                print(f"  {task_id} [{category}] {task[:55]}...")
-                _append_row(
-                    rows,
-                    cond_name,
-                    theta,
-                    task_id,
-                    category,
-                    task,
-                    run_condition_e,
-                    trajectory_log_path=trajectory_log_path,
-                )
+    if "E" in selected:
+        for theta in (theta_values or list(THETA_VALUES)):
+            cond_name = f"E_full_theta_{theta.replace('.', '_')}"
+            print(f"\n{'─' * 60}\nCondition: {cond_name} (RCA_CONFIDENCE_THETA={theta})\n{'─' * 60}")
+            with _env_override("RCA_CONFIDENCE_THETA", theta), _env_override(
+                "RCA_ALWAYS_DEEP_TSFM", "0"
+            ):
+                for task_id, task, category in tasks:
+                    print(f"  {task_id} [{category}] {task[:55]}...")
+                    _append_row(
+                        rows,
+                        cond_name,
+                        theta,
+                        task_id,
+                        category,
+                        task,
+                        run_condition_e,
+                        scenario_set_id=scenario_set_id,
+                        trajectory_log_path=trajectory_log_path,
+                    )
 
     csv_path = Path(output_dir) / "ablation_results.csv"
     with open(csv_path, "w", newline="") as f:
@@ -417,11 +505,24 @@ def _append_row(
     task: str,
     run_fn,
     *,
+    scenario_set_id: str = "",
     trajectory_log_path: str | None = None,
 ) -> None:
     try:
         out = run_fn(task)
         m = out.get("metrics", {})
+        result_obj = out.get("result", {})
+        trace_obj = {
+            "condition": cond_name,
+            "theta": theta,
+            "plan": m.get("plan"),
+            "skills_executed": m.get("skills_executed"),
+            "skills_skipped": m.get("skills_skipped"),
+            "skill_steps": m.get("skill_steps"),
+            "tool_calls": m.get("tool_calls"),
+            "deep_tsfm_invoked": m.get("deep_tsfm_invoked"),
+            "diagnosis_confidence": m.get("diagnosis_confidence"),
+        }
         completion = _task_completion_score(category, task, m, out.get("result", {}))
         if trajectory_log_path:
             from trajectory_log import append_trajectory_line, build_eval_trajectory
@@ -439,12 +540,16 @@ def _append_row(
             )
         rows.append(
             {
+                "scenario_set_id": scenario_set_id,
                 "condition": cond_name,
                 "theta": theta,
                 "task_id": task_id,
+                "scenario_id": task_id,
                 "category": category,
                 "task": task[:80],
                 "plan": json.dumps(m.get("plan", [])),
+                "result_json": json.dumps(result_obj, default=str),
+                "trace_json": json.dumps(trace_obj, default=str),
                 "tool_calls": m.get("tool_calls", -1),
                 "skipped_conditional": len(m.get("skipped_conditional", [])),
                 "skipped_early_stop": len(m.get("skipped_early_stop", [])),
@@ -467,12 +572,16 @@ def _append_row(
         logger.error("    fail %s: %s", task_id, e)
         rows.append(
             {
+                "scenario_set_id": scenario_set_id,
                 "condition": cond_name,
                 "theta": theta,
                 "task_id": task_id,
+                "scenario_id": task_id,
                 "category": category,
                 "task": task[:80],
                 "plan": "",
+                "result_json": "",
+                "trace_json": "",
                 "tool_calls": -1,
                 "skipped_conditional": -1,
                 "skipped_early_stop": -1,
@@ -489,12 +598,16 @@ def _append_row(
 
 
 FIELDS = [
+    "scenario_set_id",
     "condition",
     "theta",
     "task_id",
+    "scenario_id",
     "category",
     "task",
     "plan",
+    "result_json",
+    "trace_json",
     "tool_calls",
     "skipped_conditional",
     "skipped_early_stop",
@@ -527,7 +640,7 @@ def _print_summary(rows: list) -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run ablation conditions A–E on a task bank.")
+    parser = argparse.ArgumentParser(description="Run ablation conditions A–F (+E theta sweep) on a task bank.")
     parser.add_argument(
         "--output-dir",
         default="eval_results",
@@ -560,9 +673,35 @@ if __name__ == "__main__":
         action="store_true",
         help="Prefix BUILTIN_TASK_BANK before tsfm-report rows (dedupe by task_id).",
     )
+    parser.add_argument(
+        "--scenario-file",
+        default=None,
+        metavar="PATH",
+        help="Scenario snapshot JSON/JSONL (exported from AssetOpsBench scenario server).",
+    )
+    parser.add_argument(
+        "--scenario-set-id",
+        default="",
+        metavar="UUID",
+        help="Optional scenario-set UUID to carry through output CSV rows.",
+    )
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=["A", "B", "C", "D", "F", "E"],
+        help="Subset of conditions to run (A B C D F E).",
+    )
+    parser.add_argument(
+        "--theta-values",
+        nargs="+",
+        default=list(THETA_VALUES),
+        help="Theta values used when conditions include E.",
+    )
     args = parser.parse_args()
     task_bank = None
-    if args.hf_limit is not None:
+    if args.scenario_file:
+        task_bank = load_scenario_file(args.scenario_file)
+    elif args.hf_limit is not None:
         from scenario_loader import load_hf_scenario_tasks
 
         task_bank = load_hf_scenario_tasks(limit=args.hf_limit)
@@ -590,4 +729,7 @@ if __name__ == "__main__":
         args.output_dir,
         task_bank=task_bank,
         trajectory_log_path=args.trajectory_log,
+        condition_codes=args.conditions,
+        theta_values=args.theta_values,
+        scenario_set_id=args.scenario_set_id,
     )

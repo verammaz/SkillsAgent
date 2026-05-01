@@ -117,6 +117,46 @@ def submit_for_grading(
     return _http_json(url, method="POST", body=body)
 
 
+def _answer_from_eval_row(row: dict) -> dict[str, str]:
+    sid = str(row.get("scenario_id") or row.get("task_id") or "")
+    result_json = row.get("result_json") or "{}"
+    trace_json = row.get("trace_json") or "{}"
+    wrapped = {"result": result_json, "trace": trace_json}
+    return {"scenario_id": sid, "answer": json.dumps(wrapped, default=str)}
+
+
+def load_eval_csv_submissions(
+    csv_path: str | Path,
+    *,
+    conditions: list[str] | None = None,
+    theta_values: list[str] | None = None,
+) -> tuple[str, dict[tuple[str, str], list[dict[str, str]]]]:
+    """Group eval_runner CSV rows into grading submissions by (condition, theta)."""
+    want_conditions = {c.upper() for c in (conditions or [])}
+    want_thetas = {str(t) for t in (theta_values or [])}
+    by_variant: dict[tuple[str, str], list[dict[str, str]]] = {}
+    scenario_set_id = ""
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            if row.get("error"):
+                continue
+            cond = str(row.get("condition", ""))
+            theta = str(row.get("theta", ""))
+            if want_conditions and cond[:1].upper() not in want_conditions:
+                continue
+            if want_thetas and theta and theta not in want_thetas:
+                continue
+            sid = str(row.get("scenario_id") or row.get("task_id") or "").strip()
+            if not sid:
+                continue
+            if row.get("scenario_set_id"):
+                scenario_set_id = str(row["scenario_set_id"])
+            key = (cond, theta)
+            by_variant.setdefault(key, []).append(_answer_from_eval_row(row))
+    return scenario_set_id, by_variant
+
+
 def _condition_variants(selected: list[str], theta_values: list[str]) -> list[tuple[str, str, Callable[[str], dict]]]:
     funcs = {
         "A": run_condition_a,
@@ -148,79 +188,135 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--server-url", default=os.getenv("AOB_SCENARIO_SERVER", "http://localhost:8099"))
-    ap.add_argument("--scenario-set", required=True, help="Scenario-set UUID from /scenario-types.")
+    ap.add_argument("--scenario-set", default="", help="Scenario-set UUID from /scenario-types.")
     ap.add_argument("--conditions", nargs="+", default=["C", "D", "F", "E"], help="Subset of A B C D F E.")
     ap.add_argument("--theta-values", nargs="+", default=list(THETA_VALUES), help="Used when conditions includes E.")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of fetched scenarios.")
+    ap.add_argument(
+        "--from-eval-csv",
+        default=None,
+        metavar="PATH",
+        help="Score existing eval_runner CSV rows instead of re-running agent.",
+    )
     ap.add_argument("--output-dir", type=Path, default=Path("eval_results/aob_scored"))
     ns = ap.parse_args()
 
     ns.output_dir.mkdir(parents=True, exist_ok=True)
-    scenarios = fetch_scenarios(ns.server_url, ns.scenario_set, ns.limit)
-    if not scenarios:
-        raise RuntimeError("No scenarios fetched from server.")
-
-    variants = _condition_variants(ns.conditions, ns.theta_values)
-    if not variants:
-        raise RuntimeError("No condition variants selected.")
 
     summary_rows: list[dict] = []
     detail_rows: list[dict] = []
 
-    for cond_name, theta, run_fn in variants:
-        print(f"\nCondition: {cond_name}  theta={theta or '-'}")
-        answers: list[dict[str, str]] = []
-        run_outputs: dict[str, dict] = {}
-        for i, sc in enumerate(scenarios, start=1):
-            if theta:
-                os.environ["RCA_CONFIDENCE_THETA"] = theta
-            out = run_fn(sc.query)
-            run_outputs[sc.scenario_id] = out
-            answers.append(
-                {
-                    "scenario_id": sc.scenario_id,
-                    "answer": _build_submission_answer(out, cond_name, theta),
-                }
-            )
-            print(f"  [{i:>3}/{len(scenarios)}] {sc.scenario_id}")
-
-        graded = submit_for_grading(ns.server_url, ns.scenario_set, answers)
-        raw_path = ns.output_dir / f"graded_{cond_name}.json"
-        raw_path.write_text(json.dumps(graded, indent=2) + "\n")
-
-        grades = graded.get("grades", []) or []
-        correct = sum(1 for g in grades if bool(g.get("correct")))
-        n = len(grades) or 1
-        summary_rows.append(
-            {
-                "condition": cond_name,
-                "theta": theta,
-                "scenario_set_id": ns.scenario_set,
-                "scored": len(grades),
-                "correct_count": correct,
-                "accuracy": round(correct / n, 4),
-                "raw_json": str(raw_path),
-            }
+    if ns.from_eval_csv:
+        scenario_set_id_csv, by_variant = load_eval_csv_submissions(
+            ns.from_eval_csv,
+            conditions=ns.conditions,
+            theta_values=ns.theta_values,
         )
+        scenario_set_id = ns.scenario_set or scenario_set_id_csv
+        if not scenario_set_id:
+            raise RuntimeError("scenario_set_id missing: pass --scenario-set or include scenario_set_id column in CSV.")
+        if not by_variant:
+            raise RuntimeError("No matching rows in --from-eval-csv after filters.")
 
-        for g in grades:
-            sid = str(g.get("scenario_id"))
-            out = run_outputs.get(sid, {})
-            m = out.get("metrics", {})
-            detail_rows.append(
+        for (cond_name, theta), answers in sorted(by_variant.items()):
+            print(f"\nScoring from CSV: {cond_name} theta={theta or '-'} n={len(answers)}")
+            graded = submit_for_grading(ns.server_url, scenario_set_id, answers)
+            raw_path = ns.output_dir / f"graded_{cond_name}.json"
+            raw_path.write_text(json.dumps(graded, indent=2) + "\n")
+            grades = graded.get("grades", []) or []
+            correct = sum(1 for g in grades if bool(g.get("correct")))
+            n = len(grades) or 1
+            summary_rows.append(
                 {
                     "condition": cond_name,
                     "theta": theta,
-                    "scenario_id": sid,
-                    "correct": bool(g.get("correct")),
-                    "details": json.dumps(g.get("details", []), default=str),
-                    "tool_calls": m.get("tool_calls"),
-                    "total_cost": m.get("total_cost"),
-                    "latency_s": m.get("latency_s"),
-                    "deep_tsfm_invoked": m.get("deep_tsfm_invoked"),
-                    "diagnosis_confidence": m.get("diagnosis_confidence"),
+                    "scenario_set_id": scenario_set_id,
+                    "scored": len(grades),
+                    "correct_count": correct,
+                    "accuracy": round(correct / n, 4),
+                    "raw_json": str(raw_path),
                 }
             )
+            for g in grades:
+                detail_rows.append(
+                    {
+                        "condition": cond_name,
+                        "theta": theta,
+                        "scenario_id": str(g.get("scenario_id")),
+                        "correct": bool(g.get("correct")),
+                        "details": json.dumps(g.get("details", []), default=str),
+                        "tool_calls": "",
+                        "total_cost": "",
+                        "latency_s": "",
+                        "deep_tsfm_invoked": "",
+                        "diagnosis_confidence": "",
+                    }
+                )
+    else:
+        if not ns.scenario_set:
+            raise RuntimeError("--scenario-set is required unless --from-eval-csv is used")
+        scenarios = fetch_scenarios(ns.server_url, ns.scenario_set, ns.limit)
+        if not scenarios:
+            raise RuntimeError("No scenarios fetched from server.")
+
+        variants = _condition_variants(ns.conditions, ns.theta_values)
+        if not variants:
+            raise RuntimeError("No condition variants selected.")
+
+        for cond_name, theta, run_fn in variants:
+            print(f"\nCondition: {cond_name}  theta={theta or '-'}")
+            answers: list[dict[str, str]] = []
+            run_outputs: dict[str, dict] = {}
+            for i, sc in enumerate(scenarios, start=1):
+                if theta:
+                    os.environ["RCA_CONFIDENCE_THETA"] = theta
+                out = run_fn(sc.query)
+                run_outputs[sc.scenario_id] = out
+                answers.append(
+                    {
+                        "scenario_id": sc.scenario_id,
+                        "answer": _build_submission_answer(out, cond_name, theta),
+                    }
+                )
+                print(f"  [{i:>3}/{len(scenarios)}] {sc.scenario_id}")
+
+            graded = submit_for_grading(ns.server_url, ns.scenario_set, answers)
+            raw_path = ns.output_dir / f"graded_{cond_name}.json"
+            raw_path.write_text(json.dumps(graded, indent=2) + "\n")
+
+            grades = graded.get("grades", []) or []
+            correct = sum(1 for g in grades if bool(g.get("correct")))
+            n = len(grades) or 1
+            summary_rows.append(
+                {
+                    "condition": cond_name,
+                    "theta": theta,
+                    "scenario_set_id": ns.scenario_set,
+                    "scored": len(grades),
+                    "correct_count": correct,
+                    "accuracy": round(correct / n, 4),
+                    "raw_json": str(raw_path),
+                }
+            )
+
+            for g in grades:
+                sid = str(g.get("scenario_id"))
+                out = run_outputs.get(sid, {})
+                m = out.get("metrics", {})
+                detail_rows.append(
+                    {
+                        "condition": cond_name,
+                        "theta": theta,
+                        "scenario_id": sid,
+                        "correct": bool(g.get("correct")),
+                        "details": json.dumps(g.get("details", []), default=str),
+                        "tool_calls": m.get("tool_calls"),
+                        "total_cost": m.get("total_cost"),
+                        "latency_s": m.get("latency_s"),
+                        "deep_tsfm_invoked": m.get("deep_tsfm_invoked"),
+                        "diagnosis_confidence": m.get("diagnosis_confidence"),
+                    }
+                )
 
     summary_csv = ns.output_dir / "grading_summary.csv"
     details_csv = ns.output_dir / "grading_details.csv"
