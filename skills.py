@@ -19,6 +19,7 @@ from tools import (
     map_failure_with_meta,
     score_diagnosis_confidence, deep_tsfm_refine_anomalies,
     generate_work_order,
+    fetch_tsfm_catalog,
 )
 from knowledge import get_knowledge
 from confidence_evaluator import should_invoke_deep_tsfm, theta_from_env
@@ -247,21 +248,48 @@ def _data_retrieval_skip(context: dict) -> bool:
 # ── Skill 2: Metadata Retrieval ───────────────────────────────────────────────
 
 def metadata_retrieval(asset_id: str, context: dict, task: str) -> dict:
-    """IoT agent — fetch sensor catalog and unit descriptions."""
+    """IoT + TSFM catalog — sensor catalog plus authoritative AI-task/model lists.
+
+    TSFM lists come from ``servers.tsfm.main`` (parity with MCP ``get_ai_tasks`` /
+    ``get_tsfm_models``). Disable via ``TSFM_CATALOG_INJECTION=0``.
+    """
+    knowledge = get_knowledge("metadata_retrieval", task, context)
     raw = get_asset_metadata(asset_id)
 
-    # Optionally let LLM summarize for readability
+    catalog: dict = {}
+    if os.getenv("TSFM_CATALOG_INJECTION", "1").lower() in ("1", "true", "yes"):
+        catalog = fetch_tsfm_catalog()
+
+    payload = {
+        "user_task": task,
+        "asset_sensor_metadata": raw,
+        "tsfm_catalog": catalog,
+    }
+    if knowledge:
+        payload["injected_knowledge"] = knowledge
+
+    system = (
+        "You are an industrial asset operations assistant. Use the JSON below.\n"
+        "- For questions about supported TSFM/AI task types, available pretrained TTM models, "
+        "context lengths, or what is (not) supported in the product, follow **tsfm_catalog** only. "
+        "Do not invent model_ids; cite task_id / model_id from that list when listing capabilities.\n"
+        "- For questions about physical sensors, units, or this asset’s measurement points, use "
+        "**asset_sensor_metadata** (and **injected_knowledge** if present).\n"
+        "Answer the user_task directly and concisely."
+    )
     llm_summary = _call_llm(
-        system="Summarize the following sensor catalog in plain language.",
-        user=json.dumps(raw),
-        max_tokens=256,
+        system=system,
+        user=json.dumps(payload, default=str),
+        max_tokens=512,
     )
     return {
         "output": {
             "metadata": raw,
-            "summary":  llm_summary or f"{len(raw.get('sensors', []))} sensors found for {asset_id}.",
+            "tsfm_catalog": catalog,
+            "summary": llm_summary
+            or f"{len(raw.get('sensors', []))} sensors for {asset_id}.",
         },
-        "should_stop": True,   # metadata queries are self-contained
+        "should_stop": True,  # metadata / knowledge-style queries are self-contained
     }
 
 
@@ -466,7 +494,11 @@ def forecasting(asset_id: str, context: dict, task: str) -> dict:
     target = sensors[0] if sensors else "flow_rate_GPM"
 
     forecast = forecast_sensor(
-        asset_id, target, horizon_days=horizon_days, sensor_data=sensor_data
+        asset_id,
+        target,
+        horizon_days=horizon_days,
+        sensor_data=sensor_data,
+        task=task,
     )
 
     # Check forecast against operating ranges
@@ -555,7 +587,7 @@ SKILL_REGISTRY = {
         "fn":          metadata_retrieval,
         "should_skip": _metadata_skip,
         "cost":        0.1,
-        "description": "Retrieve sensor descriptions and units (IoT agent).",
+        "description": "Sensor catalog + TSFM task/model list (AssetOps TSFM server parity).",
     },
     "anomaly_detection": {
         "fn":          anomaly_detection,

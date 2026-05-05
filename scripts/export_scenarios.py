@@ -27,6 +27,14 @@ def _http_json(url: str) -> dict:
     except urllib.error.HTTPError as exc:
         msg = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code} {url}: {msg}") from exc
+    except urllib.error.URLError as exc:
+        hint = ""
+        if "localhost" in url or "127.0.0.1" in url:
+            hint = (
+                " If you are on Google Colab, localhost is the Colab VM, not your laptop. "
+                "Use ngrok (or similar) and pass --server-url with that HTTPS URL."
+            )
+        raise RuntimeError(f"Cannot reach scenario server {url}: {exc.reason!s}.{hint}") from exc
 
 
 def export_scenarios(

@@ -59,3 +59,33 @@ def test_build_eval_trajectory_answer_preview():
     )
     assert "answer_preview" in r
     assert len(r["answer_preview"]) < 900
+
+
+def test_build_eval_trajectory_submission_matches_tsfm_grader_shape():
+    """``aob_tsfm._grade_answer`` does ``json.loads(answer)`` then ``['result']``, ``['trace']``."""
+    out = {
+        "result": {"answer": "final reply", "extra": 1},
+        "metrics": {
+            "plan": ["data_retrieval", "forecasting"],
+            "tool_calls": 2,
+            "skills_executed": ["data_retrieval", "forecasting"],
+            "skill_steps": [{"skill": "forecasting", "status": "executed", "latency_s": 1.2}],
+        },
+    }
+    r = build_eval_trajectory(
+        condition="E",
+        theta="0.6",
+        task_id="201",
+        category="forecasting",
+        task="What types of time series analysis are supported?",
+        run_output=out,
+    )
+    assert "submission_answer_json" in r
+    inner = json.loads(r["submission_answer_json"])
+    assert set(inner) == {"result", "trace"}
+    assert isinstance(inner["result"], str)
+    assert isinstance(inner["trace"], str)
+    assert "final reply" in inner["result"]
+    trace = json.loads(inner["trace"])
+    assert trace["plan"] == ["data_retrieval", "forecasting"]
+    assert len(trace["skill_steps"]) == 1

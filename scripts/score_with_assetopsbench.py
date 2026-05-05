@@ -28,21 +28,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional; .env still read if user exports vars
+
+    def load_dotenv(*_a, **_k) -> bool:
+        return False
+
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-
-from eval_runner import (  # noqa: E402
-    THETA_VALUES,
-    run_condition_a,
-    run_condition_b,
-    run_condition_c,
-    run_condition_d,
-    run_condition_e,
-    run_condition_f,
-)
 
 
 @dataclass
@@ -65,6 +61,8 @@ def _http_json(url: str, method: str = "GET", body: dict | None = None) -> dict:
     except urllib.error.HTTPError as exc:
         msg = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"HTTP {exc.code} {url}: {msg}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Cannot reach scenario server {url}: {exc.reason!s}") from exc
 
 
 def fetch_scenarios(server_url: str, scenario_set_id: str, limit: int | None) -> list[ScenarioEntry]:
@@ -132,6 +130,10 @@ def load_eval_csv_submissions(
     theta_values: list[str] | None = None,
 ) -> tuple[str, dict[tuple[str, str], list[dict[str, str]]]]:
     """Group eval_runner CSV rows into grading submissions by (condition, theta)."""
+    try:
+        csv.field_size_limit(10**9)
+    except (OverflowError, AttributeError):
+        pass
     want_conditions = {c.upper() for c in (conditions or [])}
     want_thetas = {str(t) for t in (theta_values or [])}
     by_variant: dict[tuple[str, str], list[dict[str, str]]] = {}
@@ -157,7 +159,18 @@ def load_eval_csv_submissions(
     return scenario_set_id, by_variant
 
 
-def _condition_variants(selected: list[str], theta_values: list[str]) -> list[tuple[str, str, Callable[[str], dict]]]:
+def _condition_variants(
+    selected: list[str], theta_values: list[str]
+) -> list[tuple[str, str, Callable[[str], dict]]]:
+    from eval_runner import (  # noqa: PLC0415 — lazy import so CSV-only grading skips eval_runner deps
+        run_condition_a,
+        run_condition_b,
+        run_condition_c,
+        run_condition_d,
+        run_condition_e,
+        run_condition_f,
+    )
+
     funcs = {
         "A": run_condition_a,
         "B": run_condition_b,
@@ -190,7 +203,12 @@ def main() -> None:
     ap.add_argument("--server-url", default=os.getenv("AOB_SCENARIO_SERVER", "http://localhost:8099"))
     ap.add_argument("--scenario-set", default="", help="Scenario-set UUID from /scenario-types.")
     ap.add_argument("--conditions", nargs="+", default=["C", "D", "F", "E"], help="Subset of A B C D F E.")
-    ap.add_argument("--theta-values", nargs="+", default=list(THETA_VALUES), help="Used when conditions includes E.")
+    ap.add_argument(
+        "--theta-values",
+        nargs="+",
+        default=None,
+        help="Used when conditions includes E. Default: eval_runner.THETA_VALUES.",
+    )
     ap.add_argument("--limit", type=int, default=None, help="Limit number of fetched scenarios.")
     ap.add_argument(
         "--from-eval-csv",
@@ -206,11 +224,20 @@ def main() -> None:
     summary_rows: list[dict] = []
     detail_rows: list[dict] = []
 
+    theta_values = ns.theta_values
+    if theta_values is None:
+        if any(str(c).upper().startswith("E") for c in ns.conditions):
+            from eval_runner import THETA_VALUES  # noqa: PLC0415
+
+            theta_values = list(THETA_VALUES)
+        else:
+            theta_values = []
+
     if ns.from_eval_csv:
         scenario_set_id_csv, by_variant = load_eval_csv_submissions(
             ns.from_eval_csv,
             conditions=ns.conditions,
-            theta_values=ns.theta_values,
+            theta_values=theta_values,
         )
         scenario_set_id = ns.scenario_set or scenario_set_id_csv
         if not scenario_set_id:
@@ -259,7 +286,7 @@ def main() -> None:
         if not scenarios:
             raise RuntimeError("No scenarios fetched from server.")
 
-        variants = _condition_variants(ns.conditions, ns.theta_values)
+        variants = _condition_variants(ns.conditions, theta_values)
         if not variants:
             raise RuntimeError("No condition variants selected.")
 

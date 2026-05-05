@@ -181,6 +181,7 @@ def run_condition_b(task: str) -> dict:
             "condenser_flow_GPM",
             horizon_days=7,
             sensor_data=data,
+            task=task,
         )
         calls += 1
         context["sensor_data"] = data
@@ -341,6 +342,17 @@ def _env_override(key: str, value: str):
 THETA_VALUES = ("0.5", "0.6", "0.65", "0.7", "0.8", "0.9", "0.95")
 
 
+def _wandb_log_last_row(rows: list) -> None:
+    if not rows:
+        return
+    try:
+        from wandb_tracking import wandb_eval_log_row
+
+        wandb_eval_log_row(rows[-1])
+    except Exception:
+        pass
+
+
 def evaluate_all(
     output_dir: str = "eval_results",
     *,
@@ -360,6 +372,19 @@ def evaluate_all(
     rows: list[dict] = []
 
     selected = {c.upper() for c in (condition_codes or ["A", "B", "C", "D", "F", "E"])}
+    from wandb_tracking import wandb_eval_finish, wandb_eval_init
+
+    _theta_for_cfg = list(theta_values or list(THETA_VALUES)) if "E" in selected else []
+    wandb_eval_init(
+        {
+            "n_tasks": len(tasks),
+            "condition_codes": sorted(selected),
+            "theta_values": _theta_for_cfg,
+            "scenario_set_id": scenario_set_id or None,
+            "output_dir": str(Path(output_dir).resolve()),
+            "tsfm_report_csv": (os.environ.get("TSFM_REPORT_CSV") or "").strip() or None,
+        }
+    )
     static_conditions = []
     if "A" in selected:
         static_conditions.append(("A_raw_llm", run_condition_a))
@@ -372,51 +397,54 @@ def evaluate_all(
     if "F" in selected:
         static_conditions.append(("F_skills_knowledge_always_deep", run_condition_f))
 
-    for cond_name, run_fn in static_conditions:
-        print(f"\n{'─' * 60}\nCondition: {cond_name}\n{'─' * 60}")
-        for task_id, task, category in tasks:
-            print(f"  {task_id} [{category}] {task[:55]}...")
-            _append_row(
-                rows,
-                cond_name,
-                "",
-                task_id,
-                category,
-                task,
-                run_fn,
-                scenario_set_id=scenario_set_id,
-                trajectory_log_path=trajectory_log_path,
-            )
+    try:
+        for cond_name, run_fn in static_conditions:
+            print(f"\n{'─' * 60}\nCondition: {cond_name}\n{'─' * 60}")
+            for task_id, task, category in tasks:
+                print(f"  {task_id} [{category}] {task[:55]}...")
+                _append_row(
+                    rows,
+                    cond_name,
+                    "",
+                    task_id,
+                    category,
+                    task,
+                    run_fn,
+                    scenario_set_id=scenario_set_id,
+                    trajectory_log_path=trajectory_log_path,
+                )
 
-    if "E" in selected:
-        for theta in (theta_values or list(THETA_VALUES)):
-            cond_name = f"E_full_theta_{theta.replace('.', '_')}"
-            print(f"\n{'─' * 60}\nCondition: {cond_name} (RCA_CONFIDENCE_THETA={theta})\n{'─' * 60}")
-            with _env_override("RCA_CONFIDENCE_THETA", theta), _env_override(
-                "RCA_ALWAYS_DEEP_TSFM", "0"
-            ):
-                for task_id, task, category in tasks:
-                    print(f"  {task_id} [{category}] {task[:55]}...")
-                    _append_row(
-                        rows,
-                        cond_name,
-                        theta,
-                        task_id,
-                        category,
-                        task,
-                        run_condition_e,
-                        scenario_set_id=scenario_set_id,
-                        trajectory_log_path=trajectory_log_path,
-                    )
+        if "E" in selected:
+            for theta in (theta_values or list(THETA_VALUES)):
+                cond_name = f"E_full_theta_{theta.replace('.', '_')}"
+                print(f"\n{'─' * 60}\nCondition: {cond_name} (RCA_CONFIDENCE_THETA={theta})\n{'─' * 60}")
+                with _env_override("RCA_CONFIDENCE_THETA", theta), _env_override(
+                    "RCA_ALWAYS_DEEP_TSFM", "0"
+                ):
+                    for task_id, task, category in tasks:
+                        print(f"  {task_id} [{category}] {task[:55]}...")
+                        _append_row(
+                            rows,
+                            cond_name,
+                            theta,
+                            task_id,
+                            category,
+                            task,
+                            run_condition_e,
+                            scenario_set_id=scenario_set_id,
+                            trajectory_log_path=trajectory_log_path,
+                        )
 
-    csv_path = Path(output_dir) / "ablation_results.csv"
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        writer.writerows(rows)
+        csv_path = Path(output_dir) / "ablation_results.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=FIELDS)
+            writer.writeheader()
+            writer.writerows(rows)
 
-    print(f"\nDone. Results -> {csv_path}")
-    _print_summary(rows)
+        print(f"\nDone. Results -> {csv_path}")
+        _print_summary(rows)
+    finally:
+        wandb_eval_finish(Path(output_dir) / "ablation_results.csv")
 
 
 _EXPECTED_SKILLS = {
@@ -563,6 +591,7 @@ def _append_row(
                 "error": "",
             }
         )
+        _wandb_log_last_row(rows)
         print(
             f"    ok  calls={m.get('tool_calls')} "
             f"deep_tsfm={m.get('deep_tsfm_invoked')} "
@@ -595,6 +624,7 @@ def _append_row(
                 "error": str(e),
             }
         )
+        _wandb_log_last_row(rows)
 
 
 FIELDS = [

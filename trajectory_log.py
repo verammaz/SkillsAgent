@@ -108,6 +108,68 @@ def build_agent_trajectory(
     }
 
 
+def _grader_result_string(ctx: Any) -> str:
+    """TSFM scenario server passes ``unwrap['result']`` to EvaluationAgent as ``agent_response``."""
+    if isinstance(ctx, dict):
+        ans = ctx.get("answer")
+        if isinstance(ans, str) and ans.strip():
+            return ans
+        return json.dumps(ctx, default=str)
+    if ctx in ("", None):
+        return ""
+    return json.dumps(ctx, default=str)
+
+
+def _metrics_for_grader_trace(m: dict) -> dict:
+    """Execution trace for ``unwrap['trace']`` (EvaluationAgent ``agent_think``) — no huge blobs."""
+    if not isinstance(m, dict):
+        return {}
+    keys = (
+        "plan",
+        "tool_calls",
+        "skills_executed",
+        "skills_skipped",
+        "skipped_conditional",
+        "skipped_early_stop",
+        "stopped_at",
+        "total_cost",
+        "latency_s",
+        "diagnosis_confidence",
+        "diagnosis_confidence_pre_deep",
+        "deep_tsfm_invoked",
+    )
+    out: dict[str, Any] = {k: m[k] for k in keys if k in m}
+    steps = m.get("skill_steps")
+    if isinstance(steps, list) and steps:
+        brief: list[Any] = []
+        for s in steps[:48]:
+            if isinstance(s, dict):
+                brief.append(
+                    {
+                        k: s.get(k)
+                        for k in (
+                            "skill",
+                            "status",
+                            "should_stop",
+                            "latency_s",
+                            "output_keys",
+                            "deep_tsfm_invoked",
+                            "cost_charged",
+                            "tool_calls",
+                        )
+                        if k in s
+                    }
+                )
+            else:
+                brief.append(s)
+        if len(steps) > 48:
+            brief.append({"_truncated": f"{len(steps)} skill_steps total"})
+        out["skill_steps"] = brief
+    elif steps is not None:
+        out["skill_steps"] = steps
+    return out
+
+
 def build_eval_trajectory(
     *,
     condition: str,
@@ -117,7 +179,20 @@ def build_eval_trajectory(
     task: str,
     run_output: dict,
 ) -> dict:
-    """Flatten eval_runner row + agent output into one JSONL record."""
+    """Flatten eval_runner row + agent output into one JSONL record.
+
+    The AssetOps TSFM scenario handler grades ``ScenarioAnswer.answer`` after
+    ``json.loads`` — it must be a JSON object with **string** keys ``result`` and
+    ``trace`` (see ``aob_tsfm.AOBTSFMScenarios._grade_answer``). We expose the same
+    payload as ``submission_answer_json`` so you can submit it without hand-merging
+    from ``metrics`` / ``context_summary``.
+
+    **Important:** the server-side ``EvaluationAgent`` also scores
+    ``agent_sequence_correct`` against real TSFM / MCP-style tool traces. SkillsAgent
+    ``plan`` entries (e.g. ``direct_llm``, ``data_retrieval``) will not match that
+    rubric even when ``submission_answer_json`` is well-formed — expect low or zero
+    official pass rate unless you emit bench-shaped traces.
+    """
     m = run_output.get("metrics") or {}
     ctx = run_output.get("result") or {}
     base = {
@@ -133,4 +208,17 @@ def build_eval_trajectory(
     }
     if isinstance(ctx, dict) and "answer" in ctx:
         base["answer_preview"] = _truncate_str(str(ctx.get("answer", "")), 800)
+
+    res_str = _grader_result_string(ctx)
+    trace_obj = _metrics_for_grader_trace(m)
+    trace_str = json.dumps(trace_obj, default=str)
+    max_r, max_t = 120_000, 80_000
+    if len(res_str) > max_r:
+        res_str = res_str[: max_r - 1] + "…"
+    if len(trace_str) > max_t:
+        trace_str = trace_str[: max_t - 1] + "…"
+    base["submission_answer_json"] = json.dumps(
+        {"result": res_str, "trace": trace_str},
+        ensure_ascii=False,
+    )
     return base

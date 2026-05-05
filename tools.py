@@ -13,9 +13,12 @@
 # ``USE_IOT_SUBPROCESS=1`` / ``USE_WO_SUBPROCESS=1`` / ``USE_TSFM_SUBPROCESS=1``
 # to enable (defaults on when ASSETOPS is set for TSFM as well).
 #
-# TSFM calls ``servers.tsfm.main`` (``run_tsfm_forecasting``, ``run_integrated_tsad``).
+# TSFM calls ``servers.tsfm.main`` (``run_tsfm_forecasting``, ``run_integrated_tsad``,
+# ``fetch_tsfm_catalog`` reads ``servers.tsfm.models`` static lists).
 # Requires ``tsfm_public``, model checkpoints, and PATH_TO_* vars in AssetOpsBench
-# ``.env``. Falls back to lightweight heuristics when ML stack is unavailable.
+# ``.env``. For official TSFM scenario CSVs, set ``PATH_TO_DATASETS_DIR`` (see
+# ``tsfm_task_spec``) or place files under ``<repo>/data/tsfm_test_data/``.
+# Falls back to lightweight heuristics when ML stack is unavailable.
 
 import csv
 import json
@@ -25,6 +28,8 @@ import subprocess
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from tsfm_task_spec import parse_official_tsfm_forecast_task, resolve_tsfm_dataset_path
 
 
 # ── AssetOpsBench subprocess helper (shared with FMSR) ───────────────────────
@@ -316,6 +321,36 @@ def _use_tsfm_subprocess() -> bool:
     return os.getenv("USE_TSFM_SUBPROCESS", "1").lower() in ("1", "true", "yes")
 
 
+def fetch_tsfm_catalog() -> dict:
+    """Static TSFM task and model lists — same data as TSFM MCP ``get_ai_tasks`` / ``get_tsfm_models``.
+
+    Imports ``servers.tsfm.models`` (the MCP tools wrap these lists). We avoid
+    ``servers.tsfm.main`` here because it pulls ``mcp``/FastMCP, which may not be
+    installed in every SkillsAgent environment.
+
+    Requires ``servers`` importable (typically ``PYTHONPATH`` includes AssetOpsBench
+    ``src``).
+
+    Returns:
+        ``{"ai_tasks": [...], "models": [...]}`` with dict-shaped entries, or
+        ``{"ai_tasks": [], "models": [], "error": "<reason>"}`` on failure.
+    """
+    try:
+        from servers.tsfm import models as tsfm_models
+    except ImportError as exc:
+        return {"ai_tasks": [], "models": [], "error": f"import: {exc}"}
+
+    try:
+        tasks = getattr(tsfm_models, "_AI_TASKS", []) or []
+        models = getattr(tsfm_models, "_TSFM_MODELS", []) or []
+        return {
+            "ai_tasks": [dict(t) for t in tasks],
+            "models": [dict(m) for m in models],
+        }
+    except Exception as exc:
+        return {"ai_tasks": [], "models": [], "error": str(exc)}
+
+
 def _tsfm_effective_horizon(horizon_days: int) -> int:
     cap = int(os.getenv("TSFM_MAX_FORECAST_STEPS", "28"))
     return min(max(int(horizon_days), 1), cap)
@@ -338,14 +373,23 @@ def _write_tsfm_series_csv(
     return True
 
 
-def _tsfm_forecast_subprocess(abs_csv: str, target_column: str, horizon: int) -> dict | None:
+def _tsfm_forecast_subprocess(
+    abs_csv: str,
+    target_column: str,
+    horizon: int,
+    *,
+    timestamp_column: str = "timestamp",
+    conditional_columns: list[str] | None = None,
+) -> dict | None:
     root = _assetops_repo_root()
     if not root:
         return None
     dp = json.dumps(abs_csv)
     tc = json.dumps(target_column)
+    ts_col = json.dumps(timestamp_column)
     mc = json.dumps(os.getenv("TSFM_MODEL_CHECKPOINT", "ttm_96_28"))
     hsteps = int(horizon)
+    cond_py = repr(conditional_columns)
     script = f"""
 import json, sys
 sys.path.insert(0, "src")
@@ -353,10 +397,11 @@ from servers.tsfm.main import run_tsfm_forecasting
 import numpy as np
 r = run_tsfm_forecasting(
     dataset_path={dp},
-    timestamp_column="timestamp",
+    timestamp_column={ts_col},
     target_columns=[{tc}],
     model_checkpoint={mc},
     forecast_horizon={hsteps},
+    conditional_columns={cond_py},
     frequency_sampling="oov",
     autoregressive_modeling=True,
 )
@@ -831,14 +876,52 @@ def forecast_sensor(
     sensor: str,
     horizon_days: int = 7,
     sensor_data: dict | None = None,
+    task: str | None = None,
 ) -> dict:
     """Predict future sensor values over ``horizon_days`` (step cap via TSFM_MAX_FORECAST_STEPS).
 
-    When ``sensor_data`` has a long enough series and ``USE_TSFM_SUBPROCESS`` is on,
-    runs ``run_tsfm_forecasting`` via AssetOpsBench. Otherwise uses a lightweight mock.
+    When the natural-language ``task`` matches an official AssetOpsBench TSFM inference
+    prompt and the referenced CSV exists (``PATH_TO_DATASETS_DIR`` or
+    ``<AssetOpsBench>/data/tsfm_test_data/``), runs ``run_tsfm_forecasting`` on that file
+    with the parsed timestamp and target column names.
+
+    Otherwise, when ``sensor_data`` has a long enough series and ``USE_TSFM_SUBPROCESS``
+    is on, builds a temporary single-series CSV from IoT readings. If that fails,
+    uses a lightweight mock.
     """
     readings = (sensor_data or {}).get("readings") or {}
     h = _tsfm_effective_horizon(horizon_days)
+
+    if task and _use_tsfm_subprocess():
+        spec = parse_official_tsfm_forecast_task(task)
+        if spec is not None:
+            bench_csv = resolve_tsfm_dataset_path(
+                spec.dataset_ref, assetops_repo_root=_assetops_repo_root()
+            )
+            if bench_csv is not None:
+                cond = list(spec.conditional_columns) if spec.conditional_columns else None
+                real = _tsfm_forecast_subprocess(
+                    str(bench_csv.resolve()),
+                    spec.target_column,
+                    h,
+                    timestamp_column=spec.timestamp_column,
+                    conditional_columns=cond,
+                )
+                if real and real.get("forecasted"):
+                    fc = real["forecasted"]
+                    trend = "increasing" if fc[-1] > fc[0] else "stable"
+                    return {
+                        "asset_id": asset_id,
+                        "sensor": sensor,
+                        "resolved_column": spec.target_column,
+                        "horizon_days": horizon_days,
+                        "forecast_steps": len(fc),
+                        "forecasted": fc,
+                        "trend": trend,
+                        "source": "tsfm_subprocess_bench_csv",
+                        "dataset_path": str(bench_csv),
+                        "timestamp_column": spec.timestamp_column,
+                    }
 
     if _use_tsfm_subprocess() and readings:
         col = _find_reading_key_for_forecast(sensor, readings)
