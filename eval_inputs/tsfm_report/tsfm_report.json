@@ -1,0 +1,499 @@
+[
+  {
+    "id": 117,
+    "type": "FMSA",
+    "label": "FAULT-DIAG",
+    "text": "When compressor motor of Chiller 6 fails, what is the temporal behavior of the power input?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 120,
+    "type": "FMSA",
+    "label": "FAULT-DIAG",
+    "text": "I want to build an anomaly model for identifying a chiller trip failure for POKMAIN chiller 6. Provide me a list of sensors that I should use, along with the temporal behavior,",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 404,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Get the events of equipment CWC04009 for year 2019 and provide a summary based on the event group, such as work order event, alerts and anomaly events.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 408,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Get the daily count of the events of alert, anomaly for the May 2020 for equipment CWC04009.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 412,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "I would like to predict the next work order probability for the equipment labeled as CWC04013.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 413,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Assuming that the current date is 2018-01-02, can you predict next work order probability for me for equipment CWC04009 using predict_next_work_order_probability function?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsad"
+    ]
+  },
+  {
+    "id": 414,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Assuming that the current date is 2018-01-02, can you predict next work order probability for me for equipment CWC04009?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 415,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "When an anomaly happens for equipment CWC04009, can you recommend a list of candidate work orders and give me a summary of work order as percentage?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 416,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "When an anomaly happens for equipment CWC04009, can you recommend top three work orders to address this problem?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 420,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Assume today is early of July 2020, I would like to review the performance of chiller 9 with equipment ID CWC04009 for June 2020 and track any anomalies or operation violations as alerts.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 421,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "In May and June of 2020, numerous anomalies and alerts have been reported for Chiller 9 with equipment ID CWC04009. Could you review them and suggest appropriate work orders or actions?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 422,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "After checking existing work orders, anomalies and alerts in May and June 2020 for Chiller 9 with equipment ID CWC04009, should I recommend a new work order or is it too early to decide for July 2020?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 423,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "I am using historical work order information upto end of June 2020 for prioritizing maintenance. Which work orders should I prioritize first for Chiller 9 with equipment ID CWC04009 in July 2020?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad",
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 425,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "How can I analyze anomalies across multiple KPIs to better diagnose the root cause of these issues?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 426,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Could you identify any causal linkages between anomalies across KPIs to better understand the severity and interconnectedness?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad",
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 427,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Since we know 80% of alerts are likely spurious, can you identify the meaningful 20% for further analysis for any chillers?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 429,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "How can reasoning on operation alerts help in generating significant warning message to improve maintenance recommendations for Chiller 9 with equipment ID CWC04009?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 430,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "We are building an early detection and remediation system for potential failures, such as condenser water side fouling, for Chiller 9 with equipment ID CWC04009 at main site site with two month\u2019s period from 2020-05-01T12:30:00 to 2022-06-30T19:30:00.  We like to review the chiller\u2019s performance of the period with any anomalies or operation violations as alerts, and provide the guideline on work order generation?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 431,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Assume today is early of July 2020, I would like to review the performance of chiller 9 with equipment ID CWC04009 for June 2020 and track any anomalies or operation violations as alerts. Tell me what corrective work orders have been scheduled, and whether new work order should generate.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad",
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 432,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "I would like to review the performance of chiller 9 with equipment ID CWC04009 at main site site for June 2020 and track any anomalies or operation alerts. Tell me what corrective work orders have been scheduled, and whether new work order should generate.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 433,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "We are building an early detection system for a potential failure condenser Water side fouling for Chiller 9. Monitor Chiller 9 at main site site from 2020-04-20T12:30:00 to 2020-05-12T19:30:00, identify anomalous behaviors and provide a work order recomendation.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 434,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "We are building an early detection system for a potential failure condenser Water side fouling for Chiller 9. Monitor Chiller 9 at main site site from 2020-04-20T12:30:00 to 2020-05-12T19:30:00, identify anomalous behaviors and provide a work order recommendation if there is no such corrective work order created already.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 435,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Assume today is early of July 2020, I would like to review the alerts for chiller 9 with equipment ID CWC04009 for June 2020 and the work order should be generated based on the type of alerts.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 436,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Build a predictive model from historical alerts and work orders of CWC04009 to forecast failures and replacement needs over the forthcoming 10-year horizon.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsad"
+    ]
+  },
+  {
+    "id": 437,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Detect clusters of alerts and work orders on CWC04009 that signal elevated failure risk for the next planning cycle, guiding proactive maintenance budgeting.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 439,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Analyse sequences where alerts precede corrective work orders on CWC04009 to improve failure anticipation over the asset\u2019s remaining life-cycle.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsad"
+    ]
+  },
+  {
+    "id": 440,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Using historical counts, project how many preventive (PM) and corrective (CM) work orders each major description category is likely to generate for CWC04009 over the coming decade.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 441,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Determine which alert or work-order descriptions for CWC04009 exhibit the fastest growth trend, indicating components that may need early replacement in the life-cycle plan.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 444,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Quantify how often alerts and corrective work orders cluster together for CWC04009 to identify high-risk operational periods in the years ahead.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 445,
+    "type": "Workorder",
+    "label": "WRONG-DOMAIN",
+    "text": "Identify which alert descriptions for CWC04009 show the steepest upward trend and therefore require priority in the 10-year capital-planning roadmap.",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 501,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Is there any anomaly detected in Chiller 6's Tonnage in the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 502,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What is the forecast for 'Chiller 9 Condenser Water Flow' in the week of 2020-04-27 based on data from the MAIN site?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 503,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Have there been any anomalies in Chiller 6's Tonnage in the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 504,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you forecast Chiller 6's performance for next week based on the data from 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 505,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What's the forecast for Chiller 6's Tonnage for next week based on the data from the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 506,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Is there any anomaly detected in Chiller 9's Condenser Water Flow in the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 507,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What is the predicted energy consumption for Chiller 9 in the week of 2020-04-27 based on data from the MAIN site?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 508,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Have there been any anomalies in Chiller 6's performance metrics from the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 509,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you detect any anomalies in Chiller 6's Condenser Water Flow in the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 510,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What are the anomaly detection results for Chiller 9's Tonnage and Power Input in the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 511,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you predict Chiller 9's energy usage for next week based on data from the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 512,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Has any anomaly been detected in Chiller 6's Return Temperature in the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 513,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What is the forecast for Chiller 6's Setpoint Temperature for next week based on the week of 2020-04-27 data?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 514,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you detect any anomalies in Chiller 9's Condenser Water Flow in the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 515,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you predict Chiller 9's performance for next week based on data from the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 516,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What's the forecast for Chiller 6's future energy consumption for next week based on data from the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 517,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Are there any anomalies detected in Chiller 9's Tonnage in the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 518,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you forecast energy usage for Chiller 9 for next week using data from the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 519,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Is there any anomaly detected in Chiller 9's Power Input in the week of 2020-04-27 at MAIN?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting",
+      "run_tsad"
+    ]
+  },
+  {
+    "id": 520,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "What is the forecast for Chiller 6's energy consumption for next week based on data from the week of 2020-04-27 at the MAIN site?",
+    "tsfm_tools_called": [
+      "run_tsfm_forecasting"
+    ]
+  },
+  {
+    "id": 613,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Generate an anomaly detection recipe for detecting compressor motor failure for Chiller 6 at MAIN site.",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 617,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "When compressor motor of Chiller 6 at MAIN site fails, what is the temporal behavior of the power input?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 620,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "I want to build an anomaly model for identifying a chiller trip failure for MAIN chiller 6. Provide me a list of sensors that I should use, along with the temporal behavior,",
+    "tsfm_tools_called": [
+      "run_integrated_tsad"
+    ]
+  },
+  {
+    "id": 621,
+    "type": "multiagent",
+    "label": "WRONG-DOMAIN",
+    "text": "Can you check if there are any anomalies for chiller tonnage, and do you think I should create a work order after reviewing the anomalies?",
+    "tsfm_tools_called": [
+      "run_integrated_tsad",
+      "run_integrated_tsad"
+    ]
+  }
+]

@@ -75,7 +75,7 @@ additive — the executor reads only this dict.
 | # | Skill | Real tool | Knowledge consumed | `should_skip` | `should_stop` |
 |---|---|---|---|---|---|
 | 1 | `data_retrieval` | `get_sensor_data` → IoT MCP (or `IOT_CSV_DIR` CSVs) | `time_series_metadata.default_lookback_days` | never | never |
-| 2 | `metadata_retrieval` | `get_asset_metadata` → IoT MCP | — (LLM summarizes raw) | never | always (self-contained) |
+| 2 | `metadata_retrieval` | `get_asset_metadata` → IoT MCP + `fetch_tsfm_catalog` static lookup | `sensor_metadata` + optional TSFM task/model catalog | never | always (self-contained) |
 | 3 | `anomaly_detection` | local profile + IQR (`detect_anomaly`) | `sensor_thresholds`, `operating_ranges` | never | `severity == "none"` |
 | 4 | `root_cause_analysis` | `map_failure_with_meta` → FMSR MCP; conditionally `deep_tsfm_refine_anomalies` → TSFM MCP | `failure_modes`, `anomaly_definition` | no anomalies detected | never |
 | 5 | `validate_failure` | local policy check | `maintenance_policy` | no failure diagnosed OR no anomalies | no work order needed |
@@ -193,7 +193,7 @@ full_plan_cost = sum(m["cost"] for m in SKILL_REGISTRY.values()) + DEEP_TSFM_COS
 return round(full_plan_cost * 0.8, 3)
 ```
 
-This budget is tight enough to force the skip-gate to fire on heavy plans.
+This budget can trigger the skip-gate on heavier plans; activation is run/task dependent and can be overridden with `COST_BUDGET`.
 
 ---
 
@@ -246,7 +246,7 @@ SkillsAgent/
 ├── knowledge.py                6 plugins + get_knowledge()
 ├── tools.py                    AssetOpsBench wrappers (IoT / FMSR / TSFM / WO) + mocks
 ├── confidence_evaluator.py     should_invoke_deep_tsfm(conf, theta)
-├── eval_runner.py              Conditions A–E, θ sweep, Condition E cost_budget
+├── eval_runner.py              Conditions A/B/C/D/F + Condition E θ sweep + Condition E cost_budget
 ├── trajectory_log.py           Append per-run JSONL trajectories
 ├── scenario_loader.py          12-task BUILTIN_TASK_BANK + HF ibm-research/AssetOpsBench loader
 ├── couch_export_catalog.py     Streaming merge of main.json → SensorMetadataPlugin catalog
@@ -255,8 +255,10 @@ SkillsAgent/
 ├── scripts/
 │   ├── calibrate_costs.py      Measure wall-clock latencies → skill_costs.json
 │   ├── extract_main_json.py    main.json → data/chillers/<asset>.csv
-│   └── smoke_iot.py            IoT path live-check (subprocess or CSV)
-├── tests/                      14 test modules (see §Tests)
+│   ├── smoke_iot.py            IoT path live-check (subprocess or CSV)
+│   ├── grade_assetops_metrics.py   Grade existing ablation CSVs with AssetOps evaluator
+│   └── assetops_grader_worker.py   Worker invoked by grade_assetops_metrics via uv
+├── tests/                      18 test modules (see §Tests)
 ├── eval_results/               ablation_results.csv + trajectories.jsonl per run
 ├── data/chillers/              Extracted per-asset CSVs (created by extract_main_json.py)
 ├── skill_costs.json            Calibrated per-skill median latency (optional)
@@ -282,6 +284,10 @@ brew install uv                                    # macOS
 cd ../AssetOpsBench && uv sync && uv add granite-tsfm
 cd ../SkillsAgent
 ```
+
+For `AssetOpsBench/aobench`, prefer Python `<3.14` (3.12/3.13). The grader
+stack depends on `pyarrow` via `mlflow`; on CPython 3.14 this may fall back to
+source builds that fail without Arrow C++.
 
 Copy and edit config:
 
@@ -394,6 +400,17 @@ python scripts/score_with_assetopsbench.py \
     --output-dir eval_results/aob_tsfm_scored
 ```
 
+To grade an existing `ablation_results.csv` with AssetOps criteria:
+
+```bash
+python scripts/grade_assetops_metrics.py \
+    --ablation-csv eval_results/<run>/ablation_results.csv \
+    --use-assetopsbench-rubrics \
+    --aobench-root ../AssetOpsBench/aobench \
+    --out-csv eval_results/<run>/assetops_metrics.csv \
+    --pivot-csv eval_results/<run>/assetops_metrics_by_condition.csv
+```
+
 Useful scenario set IDs:
 - General: `d3bec9b0-59b4-4a2f-9497-28cb1eed1c80`
 - IoT: `b3aa206a-f7dc-43c9-a1f4-dcf984417487`
@@ -452,73 +469,29 @@ observed confidence knee (~0.6–0.65 on the default task bank).
 
 ## Results
 
-Latest ablation run: `eval_results/colab_20260422_1701/ablation_results.csv`
-— 12 tasks × 11 conditions = 132 rows, executed on a Colab T4 with real
-watsonx (Llama-4), real IoT CSVs from `main.json`, real TSFM (`ttm_96_28`),
-real WO CSVs, and calibrated skill costs.
+Latest evaluated runs (AssetOpsBench grader outputs):
 
-### Condition summary (mean across 12 tasks)
+- `eval_results/colab_20260503_0230/assetops_metrics_by_condition.csv` — scenarios from `eval_inputs/tsfm_report/tsfm_report.json` (`n=54`)
+- `eval_results/colab_20260503_2349/assetops_metrics_by_condition.csv` — scenarios from AssetOpsBench TSFM set `13aab653-66fe-4fe6-84d8-89f1b18eede3` (`n=23`); see `docs/assetopsbench_pipeline.md`
 
-| Condition | `task_completion` | `total_cost` | `latency_s` | deep TSFM % | tool calls |
-|---|---:|---:|---:|---:|---:|
-| **A — raw LLM** | 0.222 | 0.00 | 4.7 | 0% | 1.0 |
-| **B — tool baseline** | 0.278 | 0.85 | 3.8 | 0% | 3.4 |
-| **C — planning only** | 0.958 | 26.81 | 14.9 | 0% | 3.3 |
-| **D — skills + knowledge** | 0.931 | 25.29 | 14.9 | 0% | 3.3 |
-| **E, θ = 0.50** | 0.931 | 24.74 | 14.2 | 0% | 3.2 |
-| **E, θ = 0.60** | 0.931 | 29.54 | 18.3 | 25% | 3.3 |
-| **E, θ = 0.65** | 0.931 | 33.16 | 22.1 | 50% | 3.1 |
-| **E, θ = 0.70** | 0.958 | 38.07 | 26.9 | 67% | 3.2 |
-| **E, θ = 0.80** | 0.958 | 38.07 | 24.4 | 67% | 3.2 |
-| **E, θ = 0.90** | 0.931 | 34.58 | 22.7 | 58% | 3.1 |
-| **E, θ = 0.95** | 0.958 | 38.07 | 25.5 | 67% | 3.2 |
+### Key condition summary (0230 vs 2349)
 
-**Take-aways.**
+| Condition | 0230 `overall_correct` | 2349 `overall_correct` | 0230 `task_completion` | 2349 `task_completion` | 0230 `agent_sequence_correct` | 2349 `agent_sequence_correct` |
+|---|---:|---:|---:|---:|---:|---:|
+| **A — raw LLM** | 0.0000 | 0.1739 | 0.0652 | 0.1739 | 0.0652 | 0.3913 |
+| **B — tool baseline** | 0.1304 | 0.0870 | 0.1957 | 0.2174 | 0.2609 | 0.1739 |
+| **C — planning only** | 0.1087 | 0.2174 | 0.2667 | 0.2727 | 0.4444 | 0.3182 |
+| **D — skills + knowledge (no deep)** | 0.2174 | 0.2174 | 0.4444 | 0.2857 | 0.8667 | 0.9524 |
+| **E — best θ in each run** | **0.3043** (θ=0.8) | **0.2609** (θ=0.5/0.7/0.95) | **0.5556** (θ=0.8) | **0.3913** (θ=0.7/0.95) | 0.9091 (θ=0.9) | 0.9565 (θ=0.7) |
+| **F — skills + knowledge, always deep** | 0.1739 | 0.2174 | 0.5333 | 0.3478 | **0.9333** | 0.9130 |
 
-- Skill-aware pipelines (C / D / E) lift `task_completion` by **~4x** over
-  the raw-LLM (A) and static-tool (B) baselines.
-- The θ sweep produces the expected monotone cost-for-deep-invocation curve:
-  0 / 25% / 50% / 67% deep TSFM as θ moves from 0.50 → 0.70. Plateau above
-  0.70 reflects the task bank's max pre-deep confidence (0.657); θ = 0.95
-  just stress-tests the gate.
-- Condition D vs E at θ ≥ 0.70 differ by ~12 cost units — the
-  `DEEP_TSFM_COST` + extra RCA latency the gate trades for accuracy.
+### What to take from these two runs
 
-### Graded pre-deep confidence (Condition D, per task)
-
-Prompts vary from vague to keyword-rich; the `task_specificity` signal
-produces four distinct pre-deep confidence buckets on the default bank:
-
-| Tasks | Prompt style | `diagnosis_confidence_pre_deep` |
-|---|---|---:|
-| T01, T03, T09 | Vague (“behaving abnormally”, “was there any abnormal”, “something feels off”) | 0.573 |
-| T05, T06, T11 | Single keyword (“vibration”, “COP”, “chilled-water”) | 0.603 |
-| T08 | Two keywords (“compressor power draw”) | 0.621 |
-| T07 | Subsystem-specific (“refrigerant pressure … evaporator temp”) | 0.657 |
-
-### Post-deep confidence lift (Condition E, θ = 0.70)
-
-When the gate fires, deep TSFM reliably lifts confidence by ~0.05–0.12 via
-the TSAD-record corroboration signal:
-
-| Task | pre-deep | post-deep | Δ |
-|---|---:|---:|---:|
-| T01 | 0.573 | 0.690 | +0.117 |
-| T03 | 0.573 | 0.625 | +0.052 |
-| T05 | 0.603 | 0.655 | +0.052 |
-| T06 | 0.603 | 0.720 | +0.117 |
-| T07 | 0.657 | 0.774 | +0.117 |
-| T08 | 0.621 | 0.673 | +0.052 |
-| T09 | 0.573 | 0.690 | +0.117 |
-| T11 | 0.603 | 0.720 | +0.117 |
-
-### Cost budgeting
-
-Condition E's 80%-of-full-plan budget activates on heavy plans: on T06
-(forecasting + fault-diagnosis plan with 6 skills), `validate_failure` and
-`work_order_generation` are skipped at θ ≥ 0.65 (`skipped_conditional = 2`)
-while `task_completion` stays at 1.0 — the agent correctly drops the
-non-terminal policy check without losing the deliverable.
+- Skill-aware pipelines (`D/E/F`) consistently dominate `A/B` on process metrics (`task_completion`, `agent_sequence_correct`), even when `overall_correct` is noisy.
+- In `colab_20260503_0230`, **E at θ=0.8** is the best aggregate operating point (`overall_correct=0.3043`, `task_completion=0.5556`).
+- In `colab_20260503_2349`, `overall_correct` is flatter across E settings (top `0.2609`), while `agent_sequence_correct` peaks at **θ=0.7** (`0.9565`).
+- `hallucinations_rate` (lower is better) generally improves from `A` toward `D/E/F` in both runs, with the lowest observed values in E/F settings.
+- Budget-cap skips are run-dependent: they appeared in `colab_20260503_0230` on heavy plans, but were not triggered in `colab_20260503_2349`.
 
 ---
 
@@ -546,6 +519,7 @@ non-terminal policy check without losing the deliverable.
 | `SKILL_COSTS_PATH` | Path to calibrated `skill_costs.json` (default `./skill_costs.json`) |
 | `DEEP_TSFM_COST` | Override cost charged on deep-TSFM invocation |
 | `COST_BUDGET` | Override Condition E budget (float, or `none`) |
+| `TSFM_CATALOG_INJECTION` | `0` disables TSFM static task/model injection in `metadata_retrieval` |
 | `TSFM_REPORT_CSV` | Path to `tsfm_report.csv` — `eval_runner` uses it when `--tsfm-report` is omitted |
 | `TRAJECTORY_LOG_PATH` | Append per-run JSONL trajectories to this file |
 | `TRACE_VERBOSE` | `1` adds redacted per-skill `context_before`/`context_after` snapshots to `metrics.skill_steps` |
@@ -558,7 +532,7 @@ non-terminal policy check without losing the deliverable.
 python -m pytest tests/ -v
 ```
 
-68 tests across 14 modules:
+Current suite covers 18 test modules:
 
 | Module | What it covers |
 |---|---|
@@ -567,12 +541,15 @@ python -m pytest tests/ -v
 | `test_couch_export.py` | `couch_export_catalog` streaming parse of `main.json` |
 | `test_deep_tsfm_cost.py` | `DEEP_TSFM_COST` charged iff `deep_tsfm_invoked` |
 | `test_eval_runner.py` | Conditions B/C/D, θ sweep coverage, `_task_completion_score` |
+| `test_grade_assetops_metrics.py` | Rubric merging + `TSFM_*` task-id normalization for grader payloads |
 | `test_graded_confidence.py` | All six confidence signals, including `task_specificity` |
 | `test_iot_csv_fallback.py` | `IOT_CSV_DIR` path bypasses the subprocess |
 | `test_knowledge.py` | Plugin routing + `KNOWLEDGE_INJECTION=0` disables injection |
 | `test_llm_provider.py` | Provider routing + watsonx model fallback |
 | `test_scenario_loader.py` | `BUILTIN_TASK_BANK` shape and category coverage |
 | `test_skills_rca.py` | RCA end-to-end with/without deep TSFM |
+| `test_tsfm_catalog.py` | TSFM catalog parity (`servers.tsfm.models` static task/model lists) |
+| `test_tsfm_task_spec.py` | Parsing official TSFM forecast prompts + dataset-path resolution |
 | `test_tools_smoke.py` | Mock-path smoke test for each `tools.py` entry point |
 | `test_trajectory_log.py` | JSONL trajectory writer |
 | `test_wo_local_csv.py` | WO real Markov predictions via local CSV (skipped if `ASSETOPS` unset) |
