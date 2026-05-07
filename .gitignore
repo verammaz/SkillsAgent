@@ -9,5 +9,6 @@ __pycache__/
 *.pyz
 *.pywz
 *.pyzz
+wandb/
 
-main.json
+

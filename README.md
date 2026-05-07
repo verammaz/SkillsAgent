@@ -25,6 +25,8 @@ task  ───►  │  1. plan(task)       (LLM: watsonx / gemini / anthropic 
                      task_completion                                          │
 ```
 
+**Official AssetOpsBench (IBM):** [GitHub `IBM/AssetOpsBench`](https://github.com/IBM/AssetOpsBench) · [paper (arXiv:2506.03828)](https://arxiv.org/abs/2506.03828) · [Hugging Face dataset `ibm-research/AssetOpsBench`](https://huggingface.co/datasets/ibm-research/AssetOpsBench) (loaded at runtime by `scenario_loader.py` when not using the built-in task bank).
+
 ---
 
 ## Table of contents
@@ -217,6 +219,16 @@ Watsonx has extra resiliency:
 
 ## Data sources
 
+### About main.json
+
+`main.json` is a **CouchDB-style JSON export** of IBM asset and IoT records. In
+this repo it is used in two ways: `scripts/extract_main_json.py` streams it into
+per-asset sensor CSVs under `data/chillers/`, and `couch_export_catalog.py` can
+merge discovered sensor names into `SensorMetadataPlugin` when `COUCHDB_EXPORT_PATH`
+points at the file (see §Knowledge injection). **`main.json` is not tracked in
+Git** (size and redistribution). **The file can be provided upon request** (our runs used an export shared by our mentor **Dhaval Patel
+(IBM))**.
+
 | Server | Default source | Fallback | Override env |
 |---|---|---|---|
 | IoT (sensor time series) | `IOT_CSV_DIR/*.csv` if set, else IoT MCP subprocess | mock deterministic generator | `USE_IOT_SUBPROCESS`, `IOT_CSV_DIR` |
@@ -305,7 +317,8 @@ cp .env.public .env
 TSFM on CPU is impractical (> 10 min per call). Use `colab_setup.ipynb`:
 
 1. Upload `SkillsAgent/` and `main.json` to `MyDrive/HPML/project/` on Google
-   Drive.
+   Drive. **What `main.json` is and how to obtain it:** see **About main.json**
+   under §Data sources.
 2. Open `colab_setup.ipynb` in Colab → `Runtime → Change runtime type → T4 GPU`.
 3. Run cells top-to-bottom. The notebook will:
    - Mount Drive, then `git clone --depth=1` AssetOpsBench directly into
@@ -409,6 +422,16 @@ python scripts/grade_assetops_metrics.py \
     --aobench-root ../AssetOpsBench/aobench \
     --out-csv eval_results/<run>/assetops_metrics.csv \
     --pivot-csv eval_results/<run>/assetops_metrics_by_condition.csv
+```
+
+To backfill old `eval_results/*` runs into Weights & Biases (one folder = one W&B run):
+
+```bash
+WANDB_PROJECT=<project> WANDB_ENTITY=<entity> \
+python scripts/backfill_wandb.py \
+    --eval-root eval_results \
+    --group historical-backfill \
+    --artifact
 ```
 
 Useful scenario set IDs:
