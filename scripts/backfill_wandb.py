@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Backfill historical ``eval_results/*`` folders into W&B (one folder = one run).
+"""Backfill historical ``skillsagent_out/*`` run folders into W&B (one folder = one run).
 
 Usage example::
 
     cd SkillsAgent
     WANDB_PROJECT=my-project WANDB_ENTITY=my-team \\
     python scripts/backfill_wandb.py \\
-      --eval-root eval_results \\
+      --eval-root skillsagent_out \\
       --group historical-backfill \\
       --artifact
 
@@ -124,7 +124,7 @@ def main() -> int:
         "--eval-root",
         type=Path,
         default=None,
-        help="Directory containing run folders (default: SkillsAgent/eval_results)",
+        help="Directory containing run folders (default: SkillsAgent/skillsagent_out)",
     )
     ap.add_argument(
         "--runs",
@@ -163,7 +163,7 @@ def main() -> int:
     args = ap.parse_args()
 
     root = _skills_root()
-    eval_root = args.eval_root.expanduser().resolve() if args.eval_root else (root / "eval_results")
+    eval_root = args.eval_root.expanduser().resolve() if args.eval_root else (root / "skillsagent_out")
     run_names = {x.strip() for x in args.runs.split(",") if x.strip()} or None
 
     run_dirs = _iter_eval_dirs(eval_root, run_names)

@@ -68,8 +68,8 @@ python -m eval_runner \
   --scenario-set-id 13aab653-66fe-4fe6-84d8-89f1b18eede3 \
   --conditions C D F E \
   --theta-values 0.5 0.6 0.65 0.7 0.8 0.9 0.95 \
-  --output-dir eval_results/tsfm_snapshot_run \
-  --trajectory-log eval_results/tsfm_snapshot_run/trajectories.jsonl
+  --output-dir skillsagent_out/tsfm_snapshot_run \
+  --trajectory-log skillsagent_out/tsfm_snapshot_run/trajectories.jsonl
 ```
 
 `ablation_results.csv` now includes:
@@ -88,9 +88,9 @@ These are sufficient for deferred grading.
 ```bash
 python scripts/score_with_assetopsbench.py \
   --server-url http://localhost:8099 \
-  --from-eval-csv eval_results/tsfm_snapshot_run/ablation_results.csv \
+  --from-eval-csv skillsagent_out/tsfm_snapshot_run/ablation_results.csv \
   --conditions C D F E \
-  --output-dir eval_results/tsfm_snapshot_scored
+  --output-dir skillsagent_out/tsfm_snapshot_scored
 ```
 
 Optional filters:
@@ -107,7 +107,7 @@ This mode fetches scenarios and runs agent + grading in one script.
 python scripts/score_with_assetopsbench.py \
   --scenario-set 13aab653-66fe-4fe6-84d8-89f1b18eede3 \
   --conditions C D F E \
-  --output-dir eval_results/aob_tsfm
+  --output-dir skillsagent_out/aob_tsfm
 ```
 
 ---

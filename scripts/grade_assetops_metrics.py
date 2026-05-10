@@ -10,10 +10,10 @@ Example::
 
     cd SkillsAgent
     python scripts/grade_assetops_metrics.py \\
-        --ablation-csv eval_results/colab_20260503_2349/ablation_results.csv \\
+        --ablation-csv skillsagent_out/colab_20260503_2349/ablation_results.csv \\
         --aobench-root ../AssetOpsBench/aobench \\
-        --out-csv eval_results/colab_20260503_2349/assetops_metrics.csv \\
-        --pivot-csv eval_results/colab_20260503_2349/assetops_metrics_by_condition.csv
+        --out-csv skillsagent_out/colab_20260503_2349/assetops_metrics.csv \\
+        --pivot-csv skillsagent_out/colab_20260503_2349/assetops_metrics_by_condition.csv
 
 For CSV rows whose ``task_id`` is ``TSFM_117`` / ``TSFM_404`` (not 201–223 only), add::
 

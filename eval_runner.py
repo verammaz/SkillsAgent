@@ -342,6 +342,17 @@ def _env_override(key: str, value: str):
 THETA_VALUES = ("0.5", "0.6", "0.65", "0.7", "0.8", "0.9", "0.95")
 
 
+def _default_skillsagent_output_dir() -> Path:
+    """Default ablation output directory: ``skillsagent_out`` at the repository root."""
+    here = Path(__file__).resolve().parent
+    if here.name == "skills-knowledge-agent":
+        return here.parent.parent / "skillsagent_out"
+    return here / "skillsagent_out"
+
+
+_DEFAULT_OUTPUT_DIR = str(_default_skillsagent_output_dir())
+
+
 def _wandb_log_last_row(rows: list) -> None:
     if not rows:
         return
@@ -354,7 +365,7 @@ def _wandb_log_last_row(rows: list) -> None:
 
 
 def evaluate_all(
-    output_dir: str = "eval_results",
+    output_dir: str | None = None,
     *,
     task_bank: list[tuple[str, str, str]] | None = None,
     trajectory_log_path: str | None = None,
@@ -367,6 +378,8 @@ def evaluate_all(
     If ``trajectory_log_path`` is set, append one JSON object per task × condition
     (summarized context; see ``trajectory_log``).
     """
+    if output_dir is None:
+        output_dir = _DEFAULT_OUTPUT_DIR
     tasks = task_bank if task_bank is not None else TASK_BANK
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
@@ -673,8 +686,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ablation conditions A–F (+E theta sweep) on a task bank.")
     parser.add_argument(
         "--output-dir",
-        default="eval_results",
-        help="Directory for ablation_results.csv",
+        default=_DEFAULT_OUTPUT_DIR,
+        help="Directory for ablation_results.csv (default: <repo-root>/skillsagent_out)",
     )
     parser.add_argument(
         "--hf-limit",

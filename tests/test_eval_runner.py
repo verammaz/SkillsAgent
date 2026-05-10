@@ -39,7 +39,7 @@ def test_theta_sweep_includes_0_95():
 
 def test_theta_sweep_straddles_observed_knee():
     """Sweep must include at least one value below and above the ~0.6 knee
-    observed in ``eval_results/colab_20260422_1436`` so the frontier plot
+    observed in ``skillsagent_out/colab_20260422_1436`` so the frontier plot
     captures both ``deep-off`` and ``deep-on`` regimes."""
     from eval_runner import THETA_VALUES
 

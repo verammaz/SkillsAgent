@@ -11,7 +11,7 @@ Example:
   python scripts/score_with_assetopsbench.py \
       --scenario-set 13aab653-66fe-4fe6-84d8-89f1b18eede3 \
       --conditions C D F E \
-      --output-dir eval_results/aob_tsfm
+      --output-dir skillsagent_out/aob_tsfm
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def main() -> None:
         metavar="PATH",
         help="Score existing eval_runner CSV rows instead of re-running agent.",
     )
-    ap.add_argument("--output-dir", type=Path, default=Path("eval_results/aob_scored"))
+    ap.add_argument("--output-dir", type=Path, default=Path("skillsagent_out/aob_scored"))
     ns = ap.parse_args()
 
     ns.output_dir.mkdir(parents=True, exist_ok=True)

@@ -27,6 +27,8 @@ task  ───►  │  1. plan(task)       (LLM: watsonx / gemini / anthropic 
 
 **Official AssetOpsBench (IBM):** [GitHub `IBM/AssetOpsBench`](https://github.com/IBM/AssetOpsBench) · [paper (arXiv:2506.03828)](https://arxiv.org/abs/2506.03828) · [Hugging Face dataset `ibm-research/AssetOpsBench`](https://huggingface.co/datasets/ibm-research/AssetOpsBench) (loaded at runtime by `scenario_loader.py` when not using the built-in task bank).
 
+**Outputs:** By default, `eval_runner.py` writes under **`skillsagent_out/`** at the root of this repository (use `--output-dir skillsagent_out/colab_<timestamp>/` for dated runs).
+
 ---
 
 ## Table of contents
@@ -226,8 +228,7 @@ this repo it is used in two ways: `scripts/extract_main_json.py` streams it into
 per-asset sensor CSVs under `data/chillers/`, and `couch_export_catalog.py` can
 merge discovered sensor names into `SensorMetadataPlugin` when `COUCHDB_EXPORT_PATH`
 points at the file (see §Knowledge injection). **`main.json` is not tracked in
-Git** (size and redistribution). **The file can be provided upon request** (our runs used an export shared by our mentor **Dhaval Patel
-(IBM))**.
+Git** (size and redistribution). **The file can be provided upon request** (our runs used an export shared by our mentor **Dhaval Patel (IBM)**).
 
 | Server | Default source | Fallback | Override env |
 |---|---|---|---|
@@ -269,9 +270,10 @@ SkillsAgent/
 │   ├── extract_main_json.py    main.json → data/chillers/<asset>.csv
 │   ├── smoke_iot.py            IoT path live-check (subprocess or CSV)
 │   ├── grade_assetops_metrics.py   Grade existing ablation CSVs with AssetOps evaluator
-│   └── assetops_grader_worker.py   Worker invoked by grade_assetops_metrics via uv
+│   ├── assetops_grader_worker.py   Worker invoked by grade_assetops_metrics via uv
+│   └── backfill_wandb.py       Upload historical skillsagent_out/<run>/ folders to W&B
 ├── tests/                      18 test modules (see §Tests)
-├── eval_results/               ablation_results.csv + trajectories.jsonl per run
+├── skillsagent_out/               ablation_results.csv + trajectories.jsonl per run
 ├── data/chillers/              Extracted per-asset CSVs (created by extract_main_json.py)
 ├── skill_costs.json            Calibrated per-skill median latency (optional)
 ├── .env / .env.public          Config (see §Environment variables)
@@ -332,7 +334,7 @@ TSFM on CPU is impractical (> 10 min per call). Use `colab_setup.ipynb`:
    - Smoke-test `forecast_sensor` + `deep_tsfm_refine_anomalies` on T4.
    - Run `scripts/calibrate_costs.py` so `skill_costs.json` reflects GPU
      latency.
-   - Run `eval_runner` → `eval_results/colab_<timestamp>/`.
+   - Run `eval_runner` → `skillsagent_out/colab_<timestamp>/`.
    - Copy results back to Drive.
 
 **Edit the Watsonx credentials** in the `.env`-writing cell before running
@@ -360,8 +362,8 @@ Runs four benchmark scenarios:
 ## Running the ablation
 
 ```bash
-python -m eval_runner --output-dir eval_results/local \
-    --trajectory-log eval_results/local/trajectories.jsonl
+python -m eval_runner --output-dir skillsagent_out/local \
+    --trajectory-log skillsagent_out/local/trajectories.jsonl
 ```
 
 Writes:
@@ -374,7 +376,7 @@ Writes:
 To run against the HF scenario bank:
 
 ```bash
-python -m eval_runner --hf-limit 20 --output-dir eval_results/hf
+python -m eval_runner --hf-limit 20 --output-dir skillsagent_out/hf
 ```
 
 Or from Python:
@@ -383,7 +385,7 @@ Or from Python:
 from scenario_loader import load_hf_scenario_tasks
 from eval_runner import evaluate_all
 
-evaluate_all(output_dir="eval_results/hf",
+evaluate_all(output_dir="skillsagent_out/hf",
              task_bank=load_hf_scenario_tasks(limit=20))
 ```
 
@@ -391,11 +393,11 @@ To run on `tsfm_report.csv` (same schema as the project root file: `id,type,labe
 
 ```bash
 python -m eval_runner --tsfm-report /path/to/tsfm_report.csv \
-    --output-dir eval_results/tsfm_slice
+    --output-dir skillsagent_out/tsfm_slice
 
 # Optionally keep the builtin mini-bench first:
 python -m eval_runner --tsfm-report ../tsfm_report.csv --prepend-builtin \
-    --output-dir eval_results/combined
+    --output-dir skillsagent_out/combined
 ```
 
 Alternatively set **`TSFM_REPORT_CSV`** to that path so you can omit `--tsfm-report`.
@@ -410,26 +412,26 @@ To score ablation conditions with the AssetOpsBench evaluator (scenario server):
 python scripts/score_with_assetopsbench.py \
     --scenario-set 13aab653-66fe-4fe6-84d8-89f1b18eede3 \
     --conditions C D F E \
-    --output-dir eval_results/aob_tsfm_scored
+    --output-dir skillsagent_out/aob_tsfm_scored
 ```
 
 To grade an existing `ablation_results.csv` with AssetOps criteria:
 
 ```bash
 python scripts/grade_assetops_metrics.py \
-    --ablation-csv eval_results/<run>/ablation_results.csv \
+    --ablation-csv skillsagent_out/<run>/ablation_results.csv \
     --use-assetopsbench-rubrics \
     --aobench-root ../AssetOpsBench/aobench \
-    --out-csv eval_results/<run>/assetops_metrics.csv \
-    --pivot-csv eval_results/<run>/assetops_metrics_by_condition.csv
+    --out-csv skillsagent_out/<run>/assetops_metrics.csv \
+    --pivot-csv skillsagent_out/<run>/assetops_metrics_by_condition.csv
 ```
 
-To backfill old `eval_results/*` runs into Weights & Biases (one folder = one W&B run):
+To backfill old `skillsagent_out/*` runs into Weights & Biases (one folder = one W&B run):
 
 ```bash
 WANDB_PROJECT=<project> WANDB_ENTITY=<entity> \
 python scripts/backfill_wandb.py \
-    --eval-root eval_results \
+    --eval-root skillsagent_out \
     --group historical-backfill \
     --artifact
 ```
@@ -492,29 +494,18 @@ observed confidence knee (~0.6–0.65 on the default task bank).
 
 ## Results
 
-Latest evaluated runs (AssetOpsBench grader outputs):
+### Final reported run (course submission / HPML README)
 
-- `eval_results/colab_20260503_0230/assetops_metrics_by_condition.csv` — scenarios from `eval_inputs/tsfm_report/tsfm_report.json` (`n=54`)
-- `eval_results/colab_20260503_2349/assetops_metrics_by_condition.csv` — scenarios from AssetOpsBench TSFM set `13aab653-66fe-4fe6-84d8-89f1b18eede3` (`n=23`); see `docs/assetopsbench_pipeline.md`
+Use **`skillsagent_out/colab_20260503_0230/`** as the canonical artefact set:
 
-### Key condition summary (0230 vs 2349)
+- **`assetops_metrics_by_condition.csv`** / **`assetops_metrics.csv`** — AssetOpsBench scenario-server grader over the 54-scenario slice from `eval_inputs/tsfm_report/` (same IDs as `tsfm_report.json`).
+- **`ablation_results.csv`**, **`trajectories.jsonl`** — raw ablation output for that Colab GPU run (W&B run id `colab_20260503_0230`).
 
-| Condition | 0230 `overall_correct` | 2349 `overall_correct` | 0230 `task_completion` | 2349 `task_completion` | 0230 `agent_sequence_correct` | 2349 `agent_sequence_correct` |
-|---|---:|---:|---:|---:|---:|---:|
-| **A — raw LLM** | 0.0000 | 0.1739 | 0.0652 | 0.1739 | 0.0652 | 0.3913 |
-| **B — tool baseline** | 0.1304 | 0.0870 | 0.1957 | 0.2174 | 0.2609 | 0.1739 |
-| **C — planning only** | 0.1087 | 0.2174 | 0.2667 | 0.2727 | 0.4444 | 0.3182 |
-| **D — skills + knowledge (no deep)** | 0.2174 | 0.2174 | 0.4444 | 0.2857 | 0.8667 | 0.9524 |
-| **E — best θ in each run** | **0.3043** (θ=0.8) | **0.2609** (θ=0.5/0.7/0.95) | **0.5556** (θ=0.8) | **0.3913** (θ=0.7/0.95) | 0.9091 (θ=0.9) | 0.9565 (θ=0.7) |
-| **F — skills + knowledge, always deep** | 0.1739 | 0.2174 | 0.5333 | 0.3478 | **0.9333** | 0.9130 |
+Headline metrics and tables in the course **[HPML README](https://github.com/shreyarora2198/AssetOpsBench/blob/team14-final/HPML_README.md)** (`team14-final` AssetOpsBench fork) are computed from this folder (e.g. Condition **E** at **θ=0.8** vs baseline **B**).
 
-### What to take from these two runs
+### Other dated folders under `skillsagent_out/`
 
-- Skill-aware pipelines (`D/E/F`) consistently dominate `A/B` on process metrics (`task_completion`, `agent_sequence_correct`), even when `overall_correct` is noisy.
-- In `colab_20260503_0230`, **E at θ=0.8** is the best aggregate operating point (`overall_correct=0.3043`, `task_completion=0.5556`).
-- In `colab_20260503_2349`, `overall_correct` is flatter across E settings (top `0.2609`), while `agent_sequence_correct` peaks at **θ=0.7** (`0.9565`).
-- `hallucinations_rate` (lower is better) generally improves from `A` toward `D/E/F` in both runs, with the lowest observed values in E/F settings.
-- Budget-cap skips are run-dependent: they appeared in `colab_20260503_0230` on heavy plans, but were not triggered in `colab_20260503_2349`.
+Additional directories (e.g. `colab_20260503_2349`, earlier Colab timestamps, `deepagent/`) are **exploratory or auxiliary experiments** — alternate scenario sets, tooling checks, or ablations not used as the final reported numbers. See each folder’s CSVs and `docs/assetopsbench_pipeline.md` for context.
 
 ---
 
@@ -563,6 +554,7 @@ Current suite covers 18 test modules:
 | `test_cost_budget.py` | Calibrated costs override priors + Condition E skip-on-budget |
 | `test_couch_export.py` | `couch_export_catalog` streaming parse of `main.json` |
 | `test_deep_tsfm_cost.py` | `DEEP_TSFM_COST` charged iff `deep_tsfm_invoked` |
+| `test_deep_agent_smoke.py` | Deep-agent eval harness imports / smoke (optional deps) |
 | `test_eval_runner.py` | Conditions B/C/D, θ sweep coverage, `_task_completion_score` |
 | `test_grade_assetops_metrics.py` | Rubric merging + `TSFM_*` task-id normalization for grader payloads |
 | `test_graded_confidence.py` | All six confidence signals, including `task_specificity` |
